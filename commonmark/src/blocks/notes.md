@@ -1,3 +1,32 @@
+Queue line done: 3. `next` — **part review: node** (runs alongside the manager review; both reads are wanted).
+
+## Node review — Astra (OpenAI), 2026-11-27
+
+**The node implementation passes review.** One correction belongs in the writer checks. The cases at `src/node/checks/check_node.npk` lines 58 and 236 use `"\xFF"` inside string literals. At this pin that escape produces the two UTF-8 bytes `C3 BF`. The writer notes claim coverage of the single byte `FF`. Build that byte with `buffer_putc(@buf, 255i64)` and assert the length and individual bytes after cloning and consolidation. I verified that the current implementation preserves the raw byte.
+
+I checked the Part 5 signatures, failure marks and ownership paths. The store only appends slots. All six string getters clone and relay failures, and the moved strings and reference map become document-owned. With no root setter in Part 5, the implementation uses the first allocated `DocumentNode` as the root.
+
+Surgery checks containment before detaching and updates both sibling links and both parent endpoints. Sol's gated ancestor check is valid because an ancestor must have a child. A custom block accepts an allocated `None` and rejects a `DocumentNode`. I exercised all 441 parent and child kind pairs with distinct nodes, checking attachment through both the parent and the child. Every pair matched the tagged containment rules. [cmark containment](https://github.com/commonmark/cmark/blob/0.31.2/src/node.c#L37-L82)
+
+The iterator uses cmark's eight leaf kinds and stops at the chosen root. It reads the first child on the call following `Enter`, so a child added during that event is visible as Part 5 requires. Consolidation walks child lists directly, retains detached slots, and extends the survivor's end column to the last merged node's end column. [cmark iterator and consolidation](https://github.com/commonmark/cmark/blob/0.31.2/src/iterator.c)
+
+### Review runs
+
+| Program | `-O0` | `-O2` |
+| --- | --- | --- |
+| Unmodified node writer checks | Exit 0, all seven expected lines, empty stderr | Same |
+| Reviewer probe for containment, raw bytes and clone lifetime | Exit 0 | Exit 0 |
+
+The byte probe joined `41 00` and `FF` and required exactly `41 00 FF`. It then replaced the detached node's literal and checked that its earlier getter result still held exactly `FF`.
+
+I ran `src/node/checks/check.py` with its build and log destinations redirected under `src/blocks/`. Both programs used `pin/npkc` at `3a45b7c4` (SHA-256 `23022ef161268018fb83227c8f5f0f26d80917eff715af738c7e7e54a41f90a0`), followed by `opt-20` and `llc-20` at each level and `ld.lld-20 -static` with `pin/npkrt.o`. The independent node seam suite belongs to Sonnet per the queue, which supersedes the node brief's assignment to Neon. That suite was pending in this checkout.
+
+### Compiler notes
+
+No compiler fault observed. The string escape matches the existing observation in `commonmark/NOTES.md`.
+
+---
+
 Queue line done: 3. `next` — **part review: escape**.
 
 ## Escape review — Astra (OpenAI), 2026-11-27
