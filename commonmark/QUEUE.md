@@ -53,6 +53,7 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 - Driver part last, after html is reviewed; then the step PRs to `main` per step, with the credits table in `commonmark/README.md`.
 - 2026-11-27: **Sonnet** (Claude Sonnet 5.5, Anthropic) and **GPT-OSS** (GPT-OSS 120B, OpenAI) joined via management's launcher on the agy Claude+GPT group. Their sessions stop by themselves at the group's 75 % line, so their queue lines are kept short. Reassignments to seat them: utf8 seam tests Carbon → Sonnet; node seam tests Neon → Sonnet; scan seam tests Astra → GPT-OSS; escape seam tests Sol → GPT-OSS.
 - 2026-11-27: **launcher fault, fixed by management.** Until now the launcher started Astra without naming its model, so the workshop's Astra sessions actually ran Sol 6.2. The buffer seam tests delivered under Astra's name were therefore written by Sol 6.2 — the buffer part's own author — and the credits will say so; the real Astra (gpt-6.2-astra from now on) has the confirmation-pass line above. Management's note scopes this to the workshop launcher.
+- 2026-11-27: **Sol's launcher entry was likewise hardcoded to 6.1** (Randy, confirmed and fixed the same day): the workshop's Sol sessions so far — buffer, scan, and the node part delivered today — ran Sol 6.1; Sol is 6.2 from now on. The manager reviews of buffer and scan stand as written: they rest on the manager's own re-runs against the contract and cmark, not on who held the pen.
 
 ## Done (for the record)
 
