@@ -1,0 +1,166 @@
+// Written by Astra (OpenAI) from INTERFACES.md Part 1.
+mod:buffer_seam;
+
+use "../../../src/buffer/cm_buffer.npk".*;
+use "../../../../pin/lib/nstr.npk".nstr_eq;
+
+func:check_lifecycle = bool() {
+    Buffer:empty = relay buffer_create();
+    if (raw buffer_len(empty) != 0i64) { pass false; }
+    string:empty_text = raw buffer_detach(move(empty));
+    if (empty_text.len != 0i64) { pass false; }
+
+    Buffer:first = relay buffer_create();
+    Buffer:second = relay buffer_create();
+    string:base = "0middle9";
+    relay buffer_puts(@first, "[");
+    relay buffer_put(@first, base, raw chunk_of(base, 1i64, 6i64));
+    relay buffer_putc(@second, 88i64);
+    relay buffer_putc(@first, 93i64);
+    relay buffer_put(@first, base, raw chunk_of(base, base.len, 0i64));
+    relay buffer_puts(@first, "");
+    if (raw buffer_len(first) != 8i64 || raw buffer_len(second) != 1i64) {
+        pass false;
+    }
+    string:detached = raw buffer_detach(move(first));
+
+    drop buffer_clear(@second);
+    drop buffer_clear(@second);
+    if (raw buffer_len(second) != 0i64) { pass false; }
+    relay buffer_puts(@second, "fresh");
+    if (raw buffer_len(second) != 5i64) { pass false; }
+    string:reused = raw buffer_detach(move(second));
+    pass raw nstr_eq(reused, "fresh") && raw nstr_eq(detached, "[middle]");
+};
+
+func:check_chunk_ranges = bool() {
+    string:base = "AéZ";
+    Chunk:all = raw chunk_all(base);
+    if (all.off != 0i64 || all.len != 4i64) { pass false; }
+    Chunk:none = raw chunk_all("");
+    if (none.off != 0i64 || none.len != 0i64) { pass false; }
+
+    Chunk:accent = raw chunk_of(base, 1i64, 2i64);
+    if (accent.off != 1i64 || accent.len != 2i64) { pass false; }
+    if (!(raw chunk_eq(base, accent, "é"))) { pass false; }
+    if (raw chunk_eq(base, accent, "ê") || raw chunk_eq(base, accent, "éZ")) {
+        pass false;
+    }
+
+    // The range may begin inside a UTF-8 character.
+    Chunk:tail_byte = raw chunk_of(base, 2i64, 1i64);
+    string:copied = relay chunk_to_string(base, tail_byte);
+    if (copied.len != 1i64 || copied.ptr[0i64] != 169u8) { pass false; }
+    Chunk:at_end = raw chunk_of(base, base.len, 0i64);
+    string:end_text = relay chunk_to_string(base, at_end);
+    pass end_text.len == 0i64 && raw chunk_eq(base, at_end, "");
+};
+
+func:check_chunk_trim = bool() {
+    // Whitespace on both sides of the input range is outside the chunk.
+    string:base = " \tX \talpha \t beta\t Y\t ";
+    Chunk:inside = raw chunk_of(base, 3i64, 16i64);
+    Chunk:trimmed = raw chunk_trim(base, inside);
+    if (trimmed.off != 5i64 || trimmed.len != 12i64) { pass false; }
+    if (!(raw chunk_eq(base, trimmed, "alpha \t beta"))) { pass false; }
+
+    string:line = "\t\nkeep\r \t";
+    Chunk:line_trimmed = raw chunk_trim(line, raw chunk_all(line));
+    if (!(raw chunk_eq(line, line_trimmed, "\nkeep\r"))) { pass false; }
+    string:nbsp = "  \t";
+    Chunk:nbsp_trimmed = raw chunk_trim(nbsp, raw chunk_all(nbsp));
+    if (!(raw chunk_eq(nbsp, nbsp_trimmed, " "))) { pass false; }
+
+    Chunk:spaces = raw chunk_trim(base, raw chunk_of(base, 0i64, 2i64));
+    Chunk:empty = raw chunk_trim(base, raw chunk_of(base, base.len, 0i64));
+    pass spaces.len == 0i64 && empty.len == 0i64 && empty.off == base.len;
+};
+
+func:binary_text = string(int64:middle) {
+    Buffer:buf = relay buffer_create();
+    relay buffer_putc(@buf, 0i64);
+    relay buffer_putc(@buf, middle);
+    relay buffer_putc(@buf, 255i64);
+    pass raw buffer_detach(move(buf));
+};
+
+func:copy_and_append = string(Buffer->:out) {
+    string:source = relay binary_text(128i64);
+    Chunk:all = raw chunk_all(source);
+    string:different = relay binary_text(129i64);
+    if (raw chunk_eq(source, all, different)) { pass ""; }
+    relay buffer_puts(out, source);
+    Chunk:tail = raw chunk_of(source, 1i64, 2i64);
+    relay buffer_put(out, source, tail);
+    pass relay chunk_to_string(source, all);
+};
+
+func:check_binary_ownership = bool() {
+    Buffer:buf = relay buffer_create();
+    string:copy = relay copy_and_append(@buf);
+    string:another = relay binary_text(128i64);
+    if (copy.len != 3i64 || copy.ptr[0i64] != 0u8 || copy.ptr[1i64] != 128u8 ||
+        copy.ptr[2i64] != 255u8) {
+        pass false;
+    }
+    if (!(raw chunk_eq(another, raw chunk_all(another), copy))) { pass false; }
+    if (raw buffer_len(buf) != 5i64) { pass false; }
+    string:detached = raw buffer_detach(move(buf));
+    if (detached.len != 5i64) { pass false; }
+    pass detached.ptr[0i64] == 0u8 && detached.ptr[1i64] == 128u8 &&
+        detached.ptr[2i64] == 255u8 && detached.ptr[3i64] == 128u8 &&
+        detached.ptr[4i64] == 255u8;
+};
+
+func:check_growth = bool() {
+    Buffer:buf = relay buffer_create();
+    string:base = "xABy";
+    int64:count = 4097i64;
+    int64:i = 0i64;
+    while (i < count) decreases count - i {
+        relay buffer_put(@buf, base, raw chunk_of(base, 1i64, 2i64));
+        relay buffer_puts(@buf, "!");
+        relay buffer_putc(@buf, (i * 73i64 + 19i64) % 256i64);
+        i = i + 1i64;
+    }
+    if (raw buffer_len(buf) != 4i64 * count) { pass false; }
+    string:text = raw buffer_detach(move(buf));
+    if (text.len != 4i64 * count) { pass false; }
+    i = 0i64;
+    while (i < count) decreases count - i {
+        int64:start = 4i64 * i;
+        if (text.ptr[start] != 65u8 || text.ptr[start + 1i64] != 66u8 ||
+            text.ptr[start + 2i64] != 33u8 ||
+            (text.ptr[start + 3i64] => int64) != (i * 73i64 + 19i64) % 256i64) {
+            pass false;
+        }
+        i = i + 1i64;
+    }
+    pass true;
+};
+
+func:check_all = int32() {
+    if (!(relay check_lifecycle())) { pass 11i32; }
+    if (!(relay check_chunk_ranges())) { pass 12i32; }
+    if (!(relay check_chunk_trim())) { pass 13i32; }
+    if (!(relay check_binary_ownership())) { pass 14i32; }
+    if (!(relay check_growth())) { pass 15i32; }
+    pass 0i32;
+};
+
+func:main = int32(cstring[]:_~argv) {
+    Result<int32>:outcome = check_all();
+    if (outcome.is_error) { !!! outcome.err; }
+    exit outcome.value;
+};
+
+// Any returned error is forwarded here unchanged by main.
+// Runtime traps (e.g. allocation, bounds) reach the same test failure exit.
+func:failsafe = int32(Error:err) {
+    pick (err) {
+        (Unreachable, HeapOom, HeapBadRequest, WildLeak, StackExhausted,
+         MachineFault, DivByZero, DivOverflow, IntOverflow, OutOfBounds,
+         DecreasesViolated) { exit 100i32; },
+        (*) { exit 100i32; }
+    }
+};
