@@ -42,9 +42,9 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 
 ### Sonnet
 
-1. `next` — **seam tests: utf8** (tests/seams/utf8/), from INTERFACES.md Part 2 alone.
-2. `ready` — **seam tests: node** (tests/seams/node/), from INTERFACES.md Part 5 alone. The folder starts empty; you write the tests.
-3. `ready` — **seam tests: scan** (tests/seams/scan/), from INTERFACES.md Part 4 alone. The folder starts empty; you write the tests. Note the seam from `reviews/scan.md`: scanners return match lengths, not cmark's classification codes.
+1. `next` — **seam tests: node** (tests/seams/node/), from INTERFACES.md Part 5 alone. The folder starts empty; you write the tests.
+2. `ready` — **seam tests: scan** (tests/seams/scan/), from INTERFACES.md Part 4 alone. The folder starts empty; you write the tests. Note the seam from `reviews/scan.md`: scanners return match lengths, not cmark's classification codes.
+3. `blocked: Neon utf8 grouping fix` — **extend utf8 seam tests**: add exact-count `utf8_check` repair cases for the divergent inputs in `reviews/utf8.md` addendum 2, once the port matches cmark's validator. (tests/seams/utf8/)
 
 ### GPT-OSS
 
@@ -53,6 +53,7 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 ### Manager (Muse)
 
 - Briefs: node posted (`briefs/node.md`). Still to post: blocks, inlines, html (in that order).
+- Contract clarification owed: INTERFACES.md Part 2 should pin `utf8_check`'s replacement consumption to cmark's `validate_utf8` (rides with Neon's grouping fix, as a contract-change PR).
 - Driver part last, after html is reviewed; then the step PRs to `main` per step, with the credits table in `commonmark/README.md`.
 - 2026-11-27: **Sonnet** (Claude Sonnet 5.5, Anthropic) and **GPT-OSS** (GPT-OSS 120B, OpenAI) joined via management's launcher on the agy Claude+GPT group. Their sessions stop by themselves at the group's 75 % line, so their queue lines are kept short. Reassignments to seat them: utf8 seam tests Carbon → Sonnet; node seam tests Neon → Sonnet; scan seam tests Astra → Sonnet (via GPT-OSS, see below); escape seam tests Sol → GPT-OSS.
 - 2026-11-27: **GPT-OSS is the smallest model in the rotation** (Randy's assessment: a 120B open model — capable, but not in the Sol/Astra/Claude/Gemini league; its first session waited for seam-test files to be provided instead of writing them). Reserve it for mechanical work where reasoning is not the bottleneck: harness re-runs, table-regeneration checks, example tabulation — the driver step's 652-example run is earmarked for it. It keeps the escape seam tests (the most bounded suite: six functions, byte-level expectations); the scan seam tests moved to Sonnet, whose utf8 seam work landed well.
@@ -61,4 +62,4 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 
 ## Done (for the record)
 
-- buffer (Sol) — manager review: sound. · scan (Sol) — sound. · escape (Neon) — sound, small fix queued above; Astra's part review then caught a secure-mode apostrophe divergence (manager-verified) — fix queued above. · references (Neon) — sound. · utf8 (Neon) — table fixes verified 2026-11-27, then Sol's part review caught a U+FFFD grouping divergence in `utf8_check` (manager-verified) — part reopened, fix queued above.
+- buffer (Sol) — manager review: sound. · scan (Sol) — sound. · utf8 seam tests (Sonnet) — manager review: sound (`reviews/seams-utf8.md`). · escape (Neon) — sound, small fix queued above; Astra's part review then caught a secure-mode apostrophe divergence (manager-verified) — fix queued above. · references (Neon) — sound. · utf8 (Neon) — table fixes verified 2026-11-27, then Sol's part review caught a U+FFFD grouping divergence in `utf8_check` (manager-verified) — part reopened, fix queued above.
