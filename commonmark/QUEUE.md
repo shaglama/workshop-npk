@@ -22,8 +22,8 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 
 ### Sol (OpenAI)
 
-1. `next` — **node part** (src/node/). Brief: `briefs/node.md`.
-2. `ready` — **part review: utf8**.
+1. `blocked: manager review` — **node part** (src/node/). Delivered 2026-11-27 (written by Sol 6.1, before the launcher fix) and under manager review — do not rewrite it.
+2. `next` — **part review: utf8**.
 
 ### Astra (OpenAI)
 
