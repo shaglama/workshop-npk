@@ -7,7 +7,7 @@
 mod:check_utf8;
 
 use "../../buffer/cm_buffer.npk".{
-    Buffer, Chunk, buffer_new, buffer_putc, buffer_puts, buffer_len, buffer_clear, buffer_detach,
+    Buffer, Chunk, buffer_create, buffer_putc, buffer_puts, buffer_len, buffer_clear, buffer_detach,
     chunk_of, chunk_all
 };
 use "../cm_utf8.npk".{
@@ -30,7 +30,7 @@ func:put_bytes = NIL(Buffer->:b, fixed int64[]:xs) {
 };
 
 func:mk_bytes = string(fixed int64[]:xs) {
-    Buffer:b = relay buffer_new();
+    Buffer:b = relay buffer_create();
     discard(relay put_bytes(@b, xs));
     pass (raw buffer_detach(move(b)));
 };
@@ -41,7 +41,7 @@ func:expect_iter = bool(string:base, Chunk:c, int64:pos, int64:exp_cp, int64:exp
 };
 
 func:expect_encode = bool(int64:cp, fixed int64[]:exp_bytes) {
-    Buffer:b = relay buffer_new();
+    Buffer:b = relay buffer_create();
     discard(relay utf8_encode(cp, @b));
     string:got = raw buffer_detach(move(b));
     string:exp = relay mk_bytes(exp_bytes);
@@ -49,14 +49,14 @@ func:expect_encode = bool(int64:cp, fixed int64[]:exp_bytes) {
 };
 
 func:expect_check = bool(string:base, Chunk:c, string:expected) {
-    Buffer:b = relay buffer_new();
+    Buffer:b = relay buffer_create();
     discard(relay utf8_check(base, c, @b));
     string:got = raw buffer_detach(move(b));
     pass string_equals(got, expected);
 };
 
 func:expect_fold = bool(string:base, Chunk:c, string:expected) {
-    Buffer:b = relay buffer_new();
+    Buffer:b = relay buffer_create();
     discard(relay utf8_case_fold(base, c, @b));
     string:got = raw buffer_detach(move(b));
     pass string_equals(got, expected);
@@ -217,7 +217,7 @@ func:test_encode = int32() {
     // Round-trip encode -> iterate for representative code points
     fixed int64[8]:rt = [0i64, 127i64, 128i64, 2047i64, 2048i64, 65535i64, 65536i64, 1114111i64];
     for (int64:i in 0i64...8i64) {
-        Buffer:b = relay buffer_new();
+        Buffer:b = relay buffer_create();
         discard(relay utf8_encode(rt[i], @b));
         string:s = raw buffer_detach(move(b));
         Utf8Char:ch = raw utf8_iterate(s, raw chunk_all(s), 0i64);
@@ -244,7 +244,7 @@ func:test_check = int32() {
     if (!(relay expect_check(valid, raw chunk_all(valid), valid))) { pass 80i32; }
 
     // Empty chunk appends nothing and preserves existing buffer content
-    Buffer:pre = relay buffer_new();
+    Buffer:pre = relay buffer_create();
     discard(relay buffer_puts(@pre, "keep"));
     discard(relay utf8_check("", raw chunk_all(""), @pre));
     string:kept = raw buffer_detach(move(pre));
@@ -342,7 +342,7 @@ func:test_is_punct = int32() never fails {
     }
 
     // Representative Unicode Punctuation (Pc, Pd, Ps, Pe, Pi, Pf, Po) & Symbol (Sc, Sm, Sk, So)
-    fixed int64[18]:yes_punct = [
+    fixed int64[19]:yes_punct = [
         161i64,    // U+00A1 ¡ (Po)
         163i64,    // U+00A3 £ (Sc) — CommonMark Ex 353
         168i64,    // U+00A8 ¨ (Sk)
@@ -357,30 +357,37 @@ func:test_is_punct = int32() never fails {
         8255i64,   // U+203F ‿ (Pc)
         8364i64,   // U+20AC € (Sc) — CommonMark Ex 353
         8800i64,   // U+2260 ≠ (Sm)
+        12283i64,  // U+2FFB ⿻ (So) — last IDC in cmark 0.31.2 utf8.c
         12290i64,  // U+3002 。 (Po)
         12300i64,  // U+300C 「 (Ps)
         12301i64,  // U+300D 」 (Pe)
         128512i64  // U+1F600 😀 (So)
     ];
-    for (int64:i in 0i64...18i64) {
+    for (int64:i in 0i64...19i64) {
         if (!(raw utf8_is_punct(yes_punct[i]))) { pass 111i32; }
     }
 
     // Representative non-punctuation / non-symbol code points
-    fixed int64[11]:no_punct = [
+    // Includes U+2FFC..U+2FFF and U+31EF (Unicode 15.1 additions absent from cmark 0.31.2 utf8.c)
+    fixed int64[16]:no_punct = [
         0i64 - 1i64,
         160i64,     // U+00A0 NBSP (Zs)
         192i64,     // U+00C0 À (Lu)
         223i64,     // U+00DF ß (Ll)
         945i64,     // U+03B1 α (Ll)
         1072i64,    // U+0430 а (Ll)
+        12284i64,   // U+2FFC (absent in cmark 0.31.2 utf8.c)
+        12285i64,   // U+2FFD (absent in cmark 0.31.2 utf8.c)
+        12286i64,   // U+2FFE (absent in cmark 0.31.2 utf8.c)
+        12287i64,   // U+2FFF (absent in cmark 0.31.2 utf8.c)
+        12783i64,   // U+31EF (absent in cmark 0.31.2 utf8.c)
         19968i64,   // U+4E00 一 (Lo)
         55296i64,   // U+D800 surrogate (Cs)
         65535i64,   // U+FFFF noncharacter (Cn)
         1114111i64, // U+10FFFF noncharacter (Cn)
         1114112i64  // out of range
     ];
-    for (int64:j in 0i64...11i64) {
+    for (int64:j in 0i64...16i64) {
         if (raw utf8_is_punct(no_punct[j])) { pass 112i32; }
     }
 
@@ -435,6 +442,24 @@ func:test_case_fold = int32() {
     string:e6 = relay mk_bytes(e6_bs[0i64...4i64]);
     if (!(relay expect_fold(s6, raw chunk_all(s6), e6))) { pass 126i32; }
 
+    // Unicode 16 folds present in cmark 0.31.2 spec/case_fold.inc:
+    // U+1C89 -> U+1C8A, U+A7CB -> U+0264, U+A7DC -> U+019B, U+10D50 -> U+10D70
+    fixed int64[13]:u16_in_bs = [
+        225i64, 178i64, 137i64,
+        234i64, 159i64, 139i64,
+        234i64, 159i64, 156i64,
+        240i64, 144i64, 181i64, 144i64
+    ];
+    fixed int64[11]:u16_exp_bs = [
+        225i64, 178i64, 138i64,
+        201i64, 164i64,
+        198i64, 155i64,
+        240i64, 144i64, 181i64, 176i64
+    ];
+    string:u16_in = relay mk_bytes(u16_in_bs[0i64...13i64]);
+    string:u16_exp = relay mk_bytes(u16_exp_bs[0i64...11i64]);
+    if (!(relay expect_fold(u16_in, raw chunk_all(u16_in), u16_exp))) { pass 129i32; }
+
     // Invalid UTF-8 byte in case_fold -> U+FFFD, remaining text still folded
     fixed int64[3]:s7_bs = [65i64, 255i64, 66i64];
     string:s7 = relay mk_bytes(s7_bs[0i64...3i64]);
@@ -442,7 +467,7 @@ func:test_case_fold = int32() {
     if (!(relay expect_fold(s7, raw chunk_all(s7), e7))) { pass 127i32; }
 
     // Non-zero chunk offset + append onto existing buffer contents
-    Buffer:b = relay buffer_new();
+    Buffer:b = relay buffer_create();
     discard(relay buffer_puts(@b, "pre:"));
     string:framed = "ZZẞ_ABzz";
     // "ZZ" is 2 bytes, "ẞ" is 3 bytes, "_AB" is 3 bytes -> chunk [2, 6) = "ẞ_AB"

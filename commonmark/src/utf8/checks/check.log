@@ -7,20 +7,28 @@ Toolchain: Ubuntu LLVM 20.1.2 (`llc-20`, `opt-20`, `ld.lld-20`)
 `pin/npkc` sha256: `23022ef161268018fb83227c8f5f0f26d80917eff715af738c7e7e54a41f90a0`
 `pin/npkrt.o` sha256: `c8e5033ad17c70f838d567157738a6cc046af0ca3140ad92259fa71f0e747b4e`
 
-## Test environment note (Milestone 2 parallel build)
+All builds below ran directly against the real tree (`commonmark/src/buffer/cm_buffer.npk` with `buffer_create` and `commonmark/src/utf8/cm_utf8.npk`), with no stubs.
 
-Milestone 2 builds `buffer`, `utf8`, and `scan` in parallel; `commonmark/src/buffer/` does not exist in this worker's tree, and `commonmark/assign/neon.txt` restricts writes to `src/utf8/`.
-To compile and run `src/utf8/checks/check_utf8.npk` without writing outside `src/utf8/`, `src/utf8/` was copied to `/tmp/cm_utf8_test/src/utf8/` alongside a temporary contract-conforming stub `/tmp/cm_utf8_test/src/buffer/cm_buffer.npk` (with `buffer_new` temporarily renamed to `cm_buf_new` in the `/tmp` test copy because `buffer_new` is a Nitpick builtin — see `src/utf8/notes.md`). `src/utf8/cm_utf8.npk` itself was NOT modified and does not import `buffer_new`.
+## 1. Table regeneration (`src/utf8/gen_tables.py`)
 
-## 1. Contract check harness (`src/utf8/checks/check_utf8.npk`)
+```
+python3 commonmark/src/utf8/gen_tables.py --case-fold-inc commonmark/spec/case_fold.inc
+```
+
+Output (exit 0):
+```
+Wrote /home/outside/jobs/workshop/commonmark/neon/repo/commonmark/src/utf8/cm_utf8_tables.npk: 334 non-ASCII P/S ranges (8580 code points), 1559 non-ASCII case-fold entries (104 multi-codepoint).
+```
+
+## 2. Contract check harness (`src/utf8/checks/check_utf8.npk`)
 
 ### Build & run at `-O0`
 
 ```
-./pin/npkc /tmp/cm_utf8_test/src/utf8/checks/check_utf8.npk -o /tmp/cm_utf8_test/check_utf8.ll
-llc-20 -O0 -filetype=obj -relocation-model=static /tmp/cm_utf8_test/check_utf8.ll -o /tmp/cm_utf8_test/check_utf8_o0.o
-ld.lld-20 -static /tmp/cm_utf8_test/check_utf8_o0.o ./pin/npkrt.o -o /tmp/cm_utf8_test/check_utf8_o0
-/tmp/cm_utf8_test/check_utf8_o0
+./pin/npkc commonmark/src/utf8/checks/check_utf8.npk -o /tmp/cm_utf8_build/check_utf8.ll
+llc-20 -O0 -filetype=obj -relocation-model=static /tmp/cm_utf8_build/check_utf8.ll -o /tmp/cm_utf8_build/check_utf8_o0.o
+ld.lld-20 -static /tmp/cm_utf8_build/check_utf8_o0.o ./pin/npkrt.o -o /tmp/cm_utf8_build/check_utf8_o0
+/tmp/cm_utf8_build/check_utf8_o0
 ```
 
 Output (exit 0):
@@ -37,10 +45,10 @@ ALL cm_utf8 CHECKS PASSED
 ### Build & run at `-O2`
 
 ```
-opt-20 -O2 -S /tmp/cm_utf8_test/check_utf8.ll -o /tmp/cm_utf8_test/check_utf8.opt.ll
-llc-20 -O2 -filetype=obj -relocation-model=static /tmp/cm_utf8_test/check_utf8.opt.ll -o /tmp/cm_utf8_test/check_utf8_o2.o
-ld.lld-20 -static /tmp/cm_utf8_test/check_utf8_o2.o ./pin/npkrt.o -o /tmp/cm_utf8_test/check_utf8_o2
-/tmp/cm_utf8_test/check_utf8_o2
+opt-20 -O2 -S /tmp/cm_utf8_build/check_utf8.ll -o /tmp/cm_utf8_build/check_utf8.opt.ll
+llc-20 -O2 -filetype=obj -relocation-model=static /tmp/cm_utf8_build/check_utf8.opt.ll -o /tmp/cm_utf8_build/check_utf8_o2.o
+ld.lld-20 -static /tmp/cm_utf8_build/check_utf8_o2.o ./pin/npkrt.o -o /tmp/cm_utf8_build/check_utf8_o2
+/tmp/cm_utf8_build/check_utf8_o2
 ```
 
 Output (exit 0):
@@ -54,32 +62,14 @@ PASS: utf8_case_fold
 ALL cm_utf8 CHECKS PASSED
 ```
 
-## 2. Exhaustive Unicode scalar sweep (`0x0000..0x10FFFF`)
+## 3. Exhaustive Unicode scalar sweep (`0x0000..0x10FFFF`)
 
-Verified `utf8_is_space`, `utf8_is_punct`, `utf8_encode` -> `utf8_iterate` round-trip, and `utf8_case_fold` (FNV-1a 64-bit digest over all changed code points and folded UTF-8 bytes) across all 1,114,112 code points (1,112,064 valid Unicode scalars) against independent `libutf8proc` (Unicode 15.1.0) oracle:
+Verified `utf8_is_space`, `utf8_is_punct` (count and FNV-1a 64-bit hash over all matching code points), `utf8_encode` -> `utf8_iterate` round-trip, and `utf8_case_fold` (count and FNV-1a 64-bit hash over all changed code points and folded UTF-8 bytes) across all 1,114,112 code points (1,112,064 valid Unicode scalars) against the real `commonmark/src/buffer/cm_buffer.npk` and an independent Python oracle reading `commonmark/spec/case_fold.inc` (Unicode 16, 1,559 non-ASCII + 26 ASCII = 1,585 folds) and Unicode 15.0.0 P/S (matching cmark 0.31.2's `src/utf8.c`: 8,580 non-ASCII + 32 ASCII = 8,612 code points, excluding `U+2FFC..U+2FFF` and `U+31EF`):
 
 ```
-ORACLE:  spaces=21 puncts=8617 folded=1530 hash=17511232294085469129
-NPK -O0: spaces=21 puncts=8617 folded=1530 hash=17511232294085469129
-NPK -O2: spaces=21 puncts=8617 folded=1530 hash=17511232294085469129
+ORACLE:  spaces=21 puncts=8612 phash=1308714738125238774 folded=1585 fhash=10216113528591788459
+NPK -O0: spaces=21 puncts=8612 phash=1308714738125238774 folded=1585 fhash=10216113528591788459
+NPK -O2: spaces=21 puncts=8612 phash=1308714738125238774 folded=1585 fhash=10216113528591788459
 ```
 
 Both `-O0` and `-O2` exited 0 and matched the oracle bit-for-bit.
-
-## 3. Error-relay seam check (`utf8_encode`, `utf8_check`, `utf8_case_fold`)
-
-Using a failing `cm_buffer` stub whose `buffer_put` and `buffer_putc` return `fail EFakeBuf;`:
-- `npkc` reach analysis confirmed `cm_buffer.EFakeBuf` propagates through `cm_utf8` to `failsafe`.
-- At runtime, `utf8_encode`, `utf8_check`, and `utf8_case_fold` each relayed `cm_buffer.EFakeBuf` unchanged at both `-O0` and `-O2`:
-
-```
-RELAY -O0 OK
-RELAY -O2 OK
-```
-
-## 4. Table generator (`src/utf8/gen_tables.py`)
-
-- Offline generation from system `libutf8proc` (Unicode 15.1.0):
-  `Wrote cm_utf8_tables.npk: 335 non-ASCII P/S ranges, 1504 non-ASCII case-fold entries (104 multi-codepoint).`
-- `--case-fold-inc` parser tested against a synthetic cmark `case_fold.inc` snippet (`A-Z`, `0x00DF`, `0x1E9E`, `0x0391`):
-  `PASS: gen_tables.py --case-fold-inc parser`

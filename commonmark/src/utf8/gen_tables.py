@@ -4,15 +4,11 @@ Generate commonmark/src/utf8/cm_utf8_tables.npk for the Nitpick cmark port.
 
 Reference:
   cmark 0.31.2 (commit eec0eeba6d31189fd828314576494566d539b1e3)
-  - src/case_fold.inc (case_fold_switch.inc) — Unicode full case folding (C + F)
-  - src/utf8.c (cmark_utf8proc_is_punctuation_or_symbol) — Unicode P* and S* categories
+  - src/case_fold.inc (copied verbatim to commonmark/spec/case_fold.inc)
+  - src/utf8.c (cmark_utf8proc_is_punctuation_or_symbol — Unicode 15.0.0 P* and S* set)
 
 Usage:
-  # Regenerate from a local cmark 0.31.2 checkout (case_fold.inc / case_fold_switch.inc):
-  python3 gen_tables.py --case-fold-inc /path/to/cmark/src/case_fold_switch.inc
-
-  # Regenerate offline from system libutf8proc (Unicode 15.1.0) / Python unicodedata:
-  python3 gen_tables.py
+  python3 gen_tables.py --case-fold-inc ../../spec/case_fold.inc
 
 The generated file (cm_utf8_tables.npk) is committed; do not hand-edit it.
 """
@@ -27,6 +23,12 @@ import re
 import sys
 import unicodedata
 from typing import Dict, List, Tuple
+
+
+# Code points added to Unicode P/S in Unicode 15.1.0 that are NOT in cmark 0.31.2's
+# src/utf8.c (cmark_utf8proc_is_punctuation_or_symbol uses the Unicode 15.0.0 P/S set).
+CMARK_0_31_2_EXCLUDED_15_1_PS = frozenset({0x2FFC, 0x2FFD, 0x2FFE, 0x2FFF, 0x31EF})
+CMARK_0_31_2_NON_ASCII_PS_COUNT = 8580
 
 
 def load_utf8proc():
@@ -50,21 +52,61 @@ def load_utf8proc():
 
 def parse_cmark_case_fold_inc(path: str) -> Dict[int, List[int]]:
     """
-    Parse cmark's src/case_fold.inc or src/case_fold_switch.inc.
-    Supports both forms used across cmark releases:
-      case 0xXXXX: return (const uint8_t *)"\\x..\\x..";
-      case 0xXXXX: dest = (const uint8_t *)"..."; len = N; break;
+    Parse cmark 0.31.2's src/case_fold.inc (cf_table + cf_repl compact table format),
+    with fallback support for the older switch-statement case_fold_switch.inc format.
     """
     text = open(path, "r", encoding="utf-8").read()
-    # Match `case 0xHEX:` followed by a C string literal `"..."` before the next `case` or `}`
+
+    # Format 1 (cmark 0.31.2 src/case_fold.inc):
+    #   #define CF_CODE_POINT(x)  ((x) & 0x1FFFF)
+    #   #define CF_REPL_IDX(x)    ((((x) >> 17) & 0xFFF) * 2)
+    #   #define CF_REPL_SIZE(x)   ((x) >> 29)
+    #   static const uint32_t cf_table[N] = { ... };
+    #   static const unsigned char cf_repl[M] = { ... };
+    tbl_m = re.search(r"cf_table\s*\[\s*(\d+)\s*\]\s*=\s*\{([^}]*)\}", text, re.S)
+    repl_m = re.search(r"cf_repl\s*\[\s*(\d+)\s*\]\s*=\s*\{([^}]*)\}", text, re.S)
+    if tbl_m and repl_m:
+        decl_tbl_len = int(tbl_m.group(1))
+        decl_repl_len = int(repl_m.group(1))
+        tbl_vals = [int(x, 0) for x in re.findall(r"0x[0-9a-fA-F]+|\d+", tbl_m.group(2))]
+        repl_vals = [int(x, 0) for x in re.findall(r"0x[0-9a-fA-F]+|\d+", repl_m.group(2))]
+        if len(tbl_vals) != decl_tbl_len:
+            raise ValueError(
+                f"{path}: cf_table length mismatch (parsed {len(tbl_vals)}, declared {decl_tbl_len})"
+            )
+        if len(repl_vals) != decl_repl_len:
+            raise ValueError(
+                f"{path}: cf_repl length mismatch (parsed {len(repl_vals)}, declared {decl_repl_len})"
+            )
+        mapping: Dict[int, List[int]] = {}
+        for x in tbl_vals:
+            cp = x & 0x1FFFF
+            repl_idx = ((x >> 17) & 0xFFF) * 2
+            repl_size = (x >> 29) & 0x7
+            if repl_size == 0 or repl_idx + repl_size > len(repl_vals):
+                raise ValueError(
+                    f"{path}: invalid replacement slice for U+{cp:04X}: idx={repl_idx} size={repl_size}"
+                )
+            folded = bytes(repl_vals[repl_idx : repl_idx + repl_size]).decode("utf-8")
+            cps = [ord(ch) for ch in folded]
+            if cp in mapping:
+                raise ValueError(f"{path}: duplicate case-fold entry for U+{cp:04X}")
+            if cps == [cp]:
+                raise ValueError(f"{path}: identity case-fold entry for U+{cp:04X}")
+            mapping[cp] = cps
+        if not mapping:
+            raise ValueError(f"No case-fold entries parsed from {path}")
+        return mapping
+
+    # Format 2 (legacy switch form):
+    #   case 0xXXXX: return (const uint8_t *)"\x..\x..";
     pattern = re.compile(
         r'case\s+(0x[0-9a-fA-F]+|\d+)\s*:[^;]*?"((?:\\.|[^"\\])*)"'
     )
-    mapping: Dict[int, List[int]] = {}
+    mapping = {}
     for m in pattern.finditer(text):
         cp = int(m.group(1), 0)
         raw_str = m.group(2)
-        # Decode C hex escapes (\xNN) and literal characters into bytes
         out_bytes = bytearray()
         i = 0
         while i < len(raw_str):
@@ -102,53 +144,63 @@ def parse_cmark_case_fold_inc(path: str) -> Dict[int, List[int]]:
     return mapping
 
 
-def build_case_fold_from_system(lib) -> Tuple[Dict[int, List[int]], str]:
-    mapping: Dict[int, List[int]] = {}
-    if lib is not None:
-        UTF8PROC_CASEFOLD = 1 << 10
-        ver = lib.utf8proc_unicode_version().decode("ascii")
-        buf = (ctypes.c_int32 * 16)()
-        for cp in range(0x110000):
-            if 0xD800 <= cp <= 0xDFFF:
-                continue
-            n = lib.utf8proc_decompose_char(cp, buf, 16, UTF8PROC_CASEFOLD, None)
-            if n < 0:
-                raise RuntimeError(f"utf8proc_decompose_char failed for U+{cp:04X}")
-            cps = [int(buf[i]) for i in range(n)]
-            if cps != [cp]:
-                mapping[cp] = cps
-        return mapping, f"libutf8proc (Unicode {ver})"
-    ver = unicodedata.unidata_version
-    for cp in range(0x110000):
-        if 0xD800 <= cp <= 0xDFFF:
-            continue
-        ch = chr(cp)
-        folded = ch.casefold()
-        if folded != ch:
-            mapping[cp] = [ord(c) for c in folded]
-    return mapping, f"Python unicodedata (Unicode {ver})"
-
-
-def build_punct_ranges_from_system(lib) -> Tuple[List[Tuple[int, int]], str]:
-    cps: List[int] = []
-    if lib is not None:
-        ver = lib.utf8proc_unicode_version().decode("ascii")
-        for cp in range(0x80, 0x110000):
-            if 0xD800 <= cp <= 0xDFFF:
-                continue
-            cat = lib.utf8proc_category_string(cp).decode("ascii")
-            if cat and cat[0] in ("P", "S"):
-                cps.append(cp)
-        source = f"libutf8proc (Unicode {ver})"
+def build_punct_ranges_cmark_0_31_2(lib) -> Tuple[List[Tuple[int, int]], str]:
+    """
+    Build the exact non-ASCII P/S code point ranges matching cmark 0.31.2's
+    src/utf8.c (cmark_utf8proc_is_punctuation_or_symbol), which follows the
+    Unicode 15.0.0 P/S categories (8,580 non-ASCII code points; excludes the
+    5 Unicode 15.1.0 additions U+2FFC..U+2FFF and U+31EF).
+    """
+    if unicodedata.unidata_version == "15.0.0":
+        cps = [
+            cp
+            for cp in range(0x80, 0x110000)
+            if not (0xD800 <= cp <= 0xDFFF)
+            and unicodedata.category(chr(cp))[0] in ("P", "S")
+        ]
+        source = (
+            "cmark 0.31.2 src/utf8.c P/S set "
+            "(Unicode 15.0.0 via Python unicodedata 15.0.0; excludes Unicode 15.1+ U+2FFC..U+2FFF, U+31EF)"
+        )
+        # Cross-check against libutf8proc 15.1.0 if present.
+        if lib is not None and lib.utf8proc_unicode_version().decode("ascii") == "15.1.0":
+            u8_cps = [
+                cp
+                for cp in range(0x80, 0x110000)
+                if not (0xD800 <= cp <= 0xDFFF)
+                and lib.utf8proc_category_string(cp).decode("ascii")[0] in ("P", "S")
+            ]
+            diff = set(u8_cps) - set(cps)
+            if diff != set(CMARK_0_31_2_EXCLUDED_15_1_PS) or (set(cps) - set(u8_cps)):
+                raise RuntimeError(
+                    f"Unexpected diff vs libutf8proc 15.1.0: {sorted(hex(x) for x in diff)}"
+                )
+    elif lib is not None and lib.utf8proc_unicode_version().decode("ascii") == "15.1.0":
+        cps = [
+            cp
+            for cp in range(0x80, 0x110000)
+            if not (0xD800 <= cp <= 0xDFFF)
+            and cp not in CMARK_0_31_2_EXCLUDED_15_1_PS
+            and lib.utf8proc_category_string(cp).decode("ascii")[0] in ("P", "S")
+        ]
+        source = (
+            "cmark 0.31.2 src/utf8.c P/S set "
+            "(libutf8proc 15.1.0 minus Unicode 15.1 additions U+2FFC..U+2FFF, U+31EF)"
+        )
     else:
-        ver = unicodedata.unidata_version
-        for cp in range(0x80, 0x110000):
-            if 0xD800 <= cp <= 0xDFFF:
-                continue
-            cat = unicodedata.category(chr(cp))
-            if cat and cat[0] in ("P", "S"):
-                cps.append(cp)
-        source = f"Python unicodedata (Unicode {ver})"
+        raise RuntimeError(
+            f"Unsupported Unicode version for cmark 0.31.2 P/S table: "
+            f"unicodedata={unicodedata.unidata_version}"
+        )
+
+    if len(cps) != CMARK_0_31_2_NON_ASCII_PS_COUNT:
+        raise RuntimeError(
+            f"Expected {CMARK_0_31_2_NON_ASCII_PS_COUNT} non-ASCII P/S code points "
+            f"matching cmark 0.31.2 utf8.c, got {len(cps)}"
+        )
+    for excluded in CMARK_0_31_2_EXCLUDED_15_1_PS:
+        if excluded in cps:
+            raise RuntimeError(f"Excluded code point U+{excluded:04X} unexpectedly present")
 
     ranges: List[Tuple[int, int]] = []
     for cp in cps:
@@ -170,22 +222,22 @@ def format_u32_array(name: str, values: List[int], per_line: int = 8) -> str:
     return "\n".join(lines)
 
 
-def generate(out_path: str, case_fold_inc: str | None) -> None:
+def generate(out_path: str, case_fold_inc: str) -> None:
     lib = load_utf8proc()
 
-    if case_fold_inc is not None:
-        cf_map = parse_cmark_case_fold_inc(case_fold_inc)
-        cf_source = f"cmark 0.31.2 ({os.path.basename(case_fold_inc)})"
-    else:
-        cf_map, cf_source = build_case_fold_from_system(lib)
+    cf_map = parse_cmark_case_fold_inc(case_fold_inc)
+    cf_source = f"cmark 0.31.2 ({os.path.basename(case_fold_inc)})"
 
-    punct_ranges, punct_source = build_punct_ranges_from_system(lib)
+    punct_ranges, punct_source = build_punct_ranges_cmark_0_31_2(lib)
 
-    # Filter out ASCII A-Z (handled by O(1) fast path in cm_utf8.npk).
-    # Verify all ASCII mappings are strictly A-Z -> a-z.
+    # ASCII A-Z is handled by an O(1) fast path in cm_utf8.npk.
+    # cmark 0.31.2's case_fold.inc omits ASCII entries; if an alternate input
+    # includes them, verify they are strictly A-Z -> a-z.
     for cp in range(0x80):
-        expected = [cp + 32] if 65 <= cp <= 90 else None
         actual = cf_map.get(cp)
+        if actual is None:
+            continue
+        expected = [cp + 32] if 65 <= cp <= 90 else None
         if actual != expected:
             raise RuntimeError(
                 f"Unexpected ASCII case fold for U+{cp:04X}: got {actual}, expected {expected}"
@@ -225,7 +277,7 @@ def generate(out_path: str, case_fold_inc: str | None) -> None:
         "//",
         "// Generated by: commonmark/src/utf8/gen_tables.py",
         "// Target reference: cmark 0.31.2 (commit eec0eeba6d31189fd828314576494566d539b1e3)",
-        "//   src/case_fold.inc (case_fold_switch.inc) and src/utf8.c",
+        "//   src/case_fold.inc (commonmark/spec/case_fold.inc) and src/utf8.c",
         f"// Case-folding data source: {cf_source}",
         f"// Punctuation/symbol data source: {punct_source}",
         "//",
@@ -254,21 +306,24 @@ def generate(out_path: str, case_fold_inc: str | None) -> None:
         f.write("\n".join(parts))
 
     print(
-        f"Wrote {out_path}: {len(punct_ranges)} non-ASCII P/S ranges, "
+        f"Wrote {out_path}: {len(punct_ranges)} non-ASCII P/S ranges "
+        f"({CMARK_0_31_2_NON_ASCII_PS_COUNT} code points), "
         f"{len(cf_src)} non-ASCII case-fold entries ({len(cf_multi) // 3} multi-codepoint)."
     )
 
 
 def main() -> int:
+    here = os.path.dirname(os.path.abspath(__file__))
+    default_cf = os.path.normpath(os.path.join(here, "..", "..", "spec", "case_fold.inc"))
     parser = argparse.ArgumentParser(description="Generate cm_utf8_tables.npk")
     parser.add_argument(
         "--case-fold-inc",
-        default=None,
-        help="Path to cmark 0.31.2 src/case_fold.inc or src/case_fold_switch.inc",
+        default=default_cf,
+        help="Path to cmark 0.31.2 src/case_fold.inc (default: ../../spec/case_fold.inc)",
     )
     parser.add_argument(
         "--out",
-        default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "cm_utf8_tables.npk"),
+        default=os.path.join(here, "cm_utf8_tables.npk"),
         help="Output .npk path",
     )
     args = parser.parse_args()
