@@ -22,13 +22,14 @@ One folder per part under `src/`. cmark sources named are the porting reference 
 |---|---|---|---|---|---|---|
 | 1 | `buffer` | Growable byte buffer and the borrowed-view type every parser part reads through | `buffer.c/h`, `chunk.h` | Sol (OpenAI) | Neon (Google) | Astra |
 | 2 | `utf8` | UTF-8 iterate / encode / validate-and-repair, character classes, case folding; generated data tables | `utf8.c/h`, `case_fold.inc` | Neon (Google) | Sol (OpenAI) | Carbon |
-| 3 | `scan` | The pattern scanners both parsers share (headings, fences, HTML blocks and tags, autolinks, link titles, dangerous URLs) | `scanners.re` / `scanners.c`, `scanners.h` | Astra (OpenAI) | Sol (OpenAI) | Carbon |
-| 4 | `node` | The document tree: node store, node fields, tree surgery, the enter/exit iterator, text consolidation | `node.c/h`, `iterator.c/h` | Sol (OpenAI) | Astra (OpenAI) | Neon |
-| 5 | `references` | Link reference definitions: label normalisation, store, lookup, and parsing a definition out of block content | `references.c/h`, `parse_reference_inline` in `inlines.c` | Neon (Google) | Sol (OpenAI) | Carbon |
-| 6 | `blocks` | Block structure: line feeding, open/close matching, leaf content, reference-definition extraction | `blocks.c`, `parser.h` | Astra (OpenAI) | Neon (Google) | Neon |
-| 7 | `inlines` | Inline structure within block content: text, code spans, emphasis, links and images, autolinks, raw HTML, entities, smart punctuation | `inlines.c` | Carbon (Google) | Sol (OpenAI) | Neon |
-| 8 | `html` | The HTML renderer, including the escaping rules | `html.c`, `render.c/h`, `houdini_html_e.c`, `houdini_href_e.c`, `houdini_html_u.c`, `entities.inc` | Neon (Google) | Astra (OpenAI) | Muse (manager) |
-| 9 | `driver` | The program: options, input, parse → render, output, the one `failsafe` | `main.c`, `cmark.c` | Muse (manager) | Neon (Google) | — (the spec runner) |
+| 3 | `escape` | Escaping and unescaping: HTML and href escaping, entity unescaping, backslash unescaping, URL/title cleaning; the generated entity table | `houdini_html_e.c`, `houdini_href_e.c`, `houdini_html_u.c`, `entities.inc`, `clean_url`/`clean_title` in `inlines.c` | Neon (Google) | Astra (OpenAI) | Sol |
+| 4 | `scan` | The pattern scanners both parsers share (headings, fences, HTML blocks and tags, autolinks, link titles, dangerous URLs) | `scanners.re` / `scanners.c`, `scanners.h` | Sol (OpenAI) | Carbon (Google) | Astra |
+| 5 | `node` | The document tree: node store, node fields, tree surgery, the enter/exit iterator, text consolidation | `node.c/h`, `iterator.c/h` | Sol (OpenAI) | Astra (OpenAI) | Neon |
+| 6 | `references` | Link reference definitions: label normalisation, store, lookup, and parsing a definition out of block content | `references.c/h`, `parse_reference_inline` in `inlines.c` | Neon (Google) | Sol (OpenAI) | Carbon |
+| 7 | `blocks` | Block structure: line feeding, open/close matching, leaf content, reference-definition extraction | `blocks.c`, `parser.h` | Astra (OpenAI) | Neon (Google) | Neon |
+| 8 | `inlines` | Inline structure within block content: text, code spans, emphasis, links and images, autolinks, raw HTML, entities, smart punctuation | `inlines.c` | Carbon (Google) | Sol (OpenAI) | Neon |
+| 9 | `html` | The HTML renderer (escaping itself lives in `escape`) | `html.c`, `render.c/h` | Neon (Google) | Astra (OpenAI) | Muse (manager) |
+| 10 | `driver` | The program: options, input, parse → render, output, the one `failsafe` | `main.c`, `cmark.c` | Muse (manager) | Neon (Google) | — (the spec runner) |
 | — | `tests/` | The spec runner and the per-section score keeping | cmark's `test/spec.txt` | Muse (manager) | management | — |
 
 Rules that apply to every part (from the guide):
@@ -42,8 +43,8 @@ Rules that apply to every part (from the guide):
 
 1. **This plan and the contract** — pull request with only `PLAN.md` and `INTERFACES.md`; management reviews before any part is written. Once merged, the contract is frozen; a change goes through the manager as its own pull request naming the parts it affects.
 2. **Foundations:** `buffer`, `utf8` and `scan` in parallel (no dependencies between them).
-3. **Tree and map:** `references` (depends on `buffer`, `utf8`, `scan`), then `node` (depends on `buffer`, `references` — the `Document` holds the map and answers lookups through it).
-4. **Output, then parsers:** `html` (depends on `node`, `buffer`, `utf8` — early, because `inlines` uses its entity unescape), then `blocks` (depends on `node`, `references`, `utf8`, `scan`), then `inlines` (depends on `node`, `references`, `utf8`, `scan`, `html`).
+3. **Services, tree and map:** `escape` (depends on `buffer`, `utf8`), `references` (depends on `buffer`, `utf8`, `scan`, `escape`), then `node` (depends on `buffer`, `references` — the `Document` holds the map and answers lookups through it).
+4. **Output, then parsers:** `html` (depends on `node`, `buffer`, `utf8`, `escape`), then `blocks` (depends on `node`, `references`, `utf8`, `scan`, `escape`), then `inlines` (depends on `node`, `references`, `utf8`, `scan`, `escape`).
 5. **Driver** (depends on all).
 6. **The whole:** the spec runner over all 652 examples, pass counts recorded per spec section in `tests/RESULTS.md`; inputs beyond the spec compared against cmark 0.31.2's own output.
 7. **Final pull request** to `main` from `work/commonmark`, per `WORKFLOW.md`, with a "Compiler notes" section (see NOTES.md below). A half-done converter is acceptable if the pull request says exactly what passes and what does not.
@@ -52,7 +53,7 @@ Each step ends in a commit with its tests, so a pause at any point loses nothing
 
 ## Data tables
 
-Two cmark data files are too large to port by hand and are not code: `case_fold.inc` (UTF-8 case folding, ~52 KB) and `entities.inc` (HTML entities, ~147 KB). Each owning part (`utf8`, `html`) generates a Nitpick data module from the tagged file with a small generator script kept beside it in the part's folder, naming the source file and tag in its header. The generated module is committed; the generator is how it is remade. Generated tables are data, credited to cmark under its licence like the rest of the port.
+Two cmark data files are too large to port by hand and are not code: `case_fold.inc` (UTF-8 case folding, ~52 KB) and `entities.inc` (HTML entities, ~147 KB). Each owning part (`utf8`, `escape`) generates a Nitpick data module from the tagged file with a small generator script kept beside it in the part's folder, naming the source file and tag in its header. The generated module is committed; the generator is how it is remade. Generated tables are data, credited to cmark under its licence like the rest of the port.
 
 ## Compiler faults
 

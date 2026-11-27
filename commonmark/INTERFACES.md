@@ -57,15 +57,16 @@ Options = {
 cm_buffer   → (nothing)
 cm_scan     → (nothing)
 cm_utf8     → cm_buffer
-cm_refs     → cm_buffer, cm_utf8, cm_scan
+cm_escape   → cm_buffer, cm_utf8
+cm_refs     → cm_buffer, cm_utf8, cm_scan, cm_escape
 cm_node     → cm_buffer, cm_refs
-cm_blocks   → cm_buffer, cm_utf8, cm_scan, cm_node, cm_refs
-cm_html     → cm_buffer, cm_utf8, cm_node
-cm_inlines  → cm_buffer, cm_utf8, cm_scan, cm_node, cm_refs, cm_html (entity unescape only)
+cm_blocks   → cm_buffer, cm_utf8, cm_scan, cm_node, cm_refs, cm_escape
+cm_html     → cm_buffer, cm_utf8, cm_node, cm_escape
+cm_inlines  → cm_buffer, cm_utf8, cm_scan, cm_node, cm_refs, cm_escape
 cm_main     → every part
 ```
 
-No part imports a part that imports it back. In particular, `cm_blocks` and `cm_inlines` never import each other: the scanners they share live in `cm_scan`, and reference-definition parsing lives in `cm_refs`, so the two parsers meet only through `cm_node`, `cm_refs` and `cm_scan`. (Cycles across files are near a known open fault — see `lab/context/known-issues.md` — apart from being poor structure.)
+No part imports a part that imports it back. In particular, `cm_blocks` and `cm_inlines` never import each other: the scanners they share live in `cm_scan`, and reference-definition parsing lives in `cm_refs`, so the two parsers meet only through `cm_node`, `cm_refs`, `cm_scan` and `cm_escape`. The escaping and unescaping services live in `cm_escape`, low in the graph, because almost everyone needs them: `cm_refs` cleans each definition's URL and title through it (cmark's `cmark_reference_create` calls `cmark_clean_url` / `cmark_clean_title`), `cm_blocks` unescapes fenced code info strings through it, and `cm_inlines` cleans inline link destinations through it. (Cycles across files are near a known open fault — see `lab/context/known-issues.md` — apart from being poor structure.)
 
 ## Part 1 — `buffer` (module `cm_buffer`)
 
@@ -97,7 +98,8 @@ Character-level services over bytes. All functions read a chunk of a lent base.
 Utf8Char = { cp: int64, width: int64 }  // plain data: a decoded character and its byte width
 
 utf8_iterate(base: string, c: Chunk, pos: int64) -> Utf8Char never fails
-    // the character at byte offset pos inside the chunk; an invalid byte gives { 0xFFFD, 1 }
+    // the character at byte offset pos inside the chunk; an invalid byte gives { 0xFFFD, 1 };
+    // pos at or past the end of the chunk gives { 0, 0 }
 utf8_encode(cp: int64, buf: Buffer*) -> Result<NIL>   // append cp as UTF-8; cp is a valid scalar or 0xFFFD
 utf8_check(base: string, c: Chunk, buf: Buffer*) -> Result<NIL>
     // append the chunk with every invalid sequence replaced by U+FFFD
@@ -108,7 +110,30 @@ utf8_case_fold(base: string, c: Chunk, buf: Buffer*) -> Result<NIL>  // append t
 
 The case-fold and character-class tables are generated data (see PLAN.md, "Data tables"); the functions above are the only way other parts reach them.
 
-## Part 3 — `scan` (module `cm_scan`)
+## Part 3 — `escape` (module `cm_escape`)
+
+Escaping, unescaping and cleaning (cmark's houdini files, `cmark_strbuf_unescape`, and the `clean_url` / `clean_title` pair from `inlines.c`). Low in the graph on purpose: the reference store, both parsers and the renderer all use it. The generated entity table lives here (see PLAN.md, "Data tables").
+
+```
+escape_html_into(buf: Buffer*, base: string, c: Chunk, secure: bool) -> Result<NIL>
+    // append the chunk with & < > " escaped; secure also neutralises the
+    // insecure characters cmark's houdini lists
+escape_href_into(buf: Buffer*, base: string, c: Chunk) -> Result<NIL>
+    // append the chunk percent-escaped as an href, per houdini_escape_href
+unescape_entities_into(buf: Buffer*, base: string, c: Chunk) -> Result<NIL>
+    // append the chunk with entity and numeric character references replaced
+    // by their characters (houdini_unescape_html_f)
+unescape_backslashes_into(buf: Buffer*, base: string, c: Chunk) -> Result<NIL>
+    // append the chunk with backslash escapes resolved (cmark_strbuf_unescape):
+    // a backslash before an ASCII punctuation character is dropped, any other
+    // backslash is kept
+clean_url(base: string, c: Chunk) -> Result<string>
+    // cmark_clean_url: entity-unescape, backslash-unescape, trim — in cmark's order
+clean_title(base: string, c: Chunk) -> Result<string>
+    // cmark_clean_title: the same cleaning, for titles
+```
+
+## Part 4 — `scan` (module `cm_scan`)
 
 The pattern scanners cmark generates from `scanners.re`, written by hand from the same patterns. Each scans a lent base from a byte position and returns the length matched, or 0 for no match. All are `never fails`. (cmark's take a chunk and an offset; the chunk convention makes the base explicit.)
 
@@ -133,7 +158,7 @@ scan_link_title(base: string, at: int64) -> int64 never fails
 scan_dangerous_url(base: string, at: int64) -> int64 never fails
 ```
 
-## Part 4 — `node` (module `cm_node`)
+## Part 5 — `node` (module `cm_node`)
 
 The document tree. cmark links heap nodes with pointers; the port keeps every node in one store owned by the `Document`, and refers to nodes by index.
 
@@ -179,7 +204,11 @@ Nodes are never removed from the store, so a `NodeRef` stays valid for the Docum
 Reading a node is split the way the language requires: `node_info` hands out the plain data by copy, and each string a node holds is reached through its own getter (which clones, and so returns a `Result`) and setter (which takes the new string by `move`). There is no call that returns a whole node.
 
 ```
-doc_new() -> Result<Document>
+doc_new() -> Result<Document>              // an empty document: empty store, no root, empty RefMap
+doc_set_refs(doc: Document*, move m: RefMap) never fails
+    // install a filled map as the document's own, replacing the empty one.
+    // parser_finish calls this (see cm_blocks) — the one step that moves the
+    // parser's map into the document it hands over.
 doc_root(doc: Document) -> NodeRef never fails
 node_new(doc: Document*, kind: NodeKind) -> NodeRef never fails  // appended to the store, unattached, literal empty
 node_info(doc: Document, n: NodeRef) -> NodeInfo never fails
@@ -212,7 +241,7 @@ consolidate_text_nodes(doc: Document*, root: NodeRef) never fails  // merge adja
 doc_ref_lookup(doc: Document, base: string, label: Chunk) -> Result<RefHit>   // see cm_refs for RefHit
 ```
 
-The node's tree links change only through the surgery calls (`node_append_child` … `node_replace`); `NodeInfo`'s link fields are a read view, not a handle to write through.
+The node's tree links change only through the surgery calls (`node_append_child` … `node_replace`); `NodeInfo`'s link fields are a read view, not a handle to write through. One exception to the walk rule below, by name: `consolidate_text_nodes` unlinks merged nodes, and it does not walk with the iterator — it traverses child lists directly, and it runs after `process_inlines` and before rendering, when no walk is in progress. The no-unlink rule binds walks, not it.
 
 **Iterator.** The iterator is plain state — it holds no borrow. The document is passed to each step.
 
@@ -229,7 +258,7 @@ What a walk may do to the tree while it runs (cmark's rule): a walk may **add ch
 
 Ownership: the `Document` owns every node and every string inside them. No other part frees, moves out of, or stores a node; parts hold `NodeRef` values freely (they are plain integers) and reach node contents only through the calls above, for as long as the `Document` lives. The driver owns the `Document` from `parser_finish` to the end of rendering.
 
-## Part 5 — `references` (module `cm_refs`)
+## Part 6 — `references` (module `cm_refs`)
 
 Link reference definitions, keyed by normalised label: case-folded (via `utf8_case_fold`), whitespace-collapsed, at most 1000 bytes of label (longer labels are not definitions and never match, per the spec).
 
@@ -238,8 +267,12 @@ RefMap                                   // owning
 RefHit = { found: bool, url: string, title: string }   // owning, move-only (it holds strings)
 
 refmap_new() -> Result<RefMap>
-refmap_add(m: RefMap*, base: string, label: Chunk, move url: string, move title: string) -> Result<NIL>
-    // the first definition of a label wins; a later one is dropped (the strings are consumed either way)
+refmap_add(m: RefMap*, base: string, label: Chunk, raw_url_base: string, url: Chunk,
+           raw_title_base: string, title: Chunk) -> Result<NIL>
+    // cleans the URL through cm_escape's clean_url and the title through
+    // clean_title before storing — cmark's cmark_reference_create does the same
+    // cleaning at store time. The first definition of a label wins; a later one
+    // is cleaned and dropped.
 refmap_lookup(m: RefMap, base: string, label: Chunk) -> Result<RefHit>
     // url and title are owned clones — the map keeps its own copies, so what a
     // caller does with the results cannot reach them
@@ -251,9 +284,9 @@ parse_ref_definition(m: RefMap*, base: string, c: Chunk) -> Result<RefParse>
     // Uses cm_scan's scan_link_title and cm_utf8's case folding through this part.
 ```
 
-## Part 6 — `blocks` (module `cm_blocks`)
+## Part 7 — `blocks` (module `cm_blocks`)
 
-The block parser. It owns the half-built `Document` — including the `RefMap` the parser is filling, held to one side and moved into the `Document` at finish — until `parser_finish` hands the `Document` over.
+The block parser. It owns the half-built `Document` — created empty by `parser_new` — and, to one side, the `RefMap` it is filling, until `parser_finish` hands the `Document` over.
 
 ```
 Parser = { … }                            // owning
@@ -262,46 +295,43 @@ parser_feed(p: Parser*, bytes: string) -> Result<NIL>
     // any byte count, any split; line endings (\n, \r\n, lone \r) are the parser's business.
     // While feeding, the parser adds reference definitions to its own map by calling
     // cm_refs' parse_ref_definition on the block content it assembles — field access
-    // inside the owning part, not a borrow that leaves a call.
+    // inside the owning part, not a borrow that leaves a call. When a fenced code
+    // block closes, its info string is unescaped through cm_escape (entity and
+    // backslash unescaping, as cmark's finalize step does) before it is stored
+    // with node_set_code_info.
 parser_finish(move p: Parser) -> Result<Document>
-    // closes all open blocks; the RefMap moves into the returned Document
+    // closes all open blocks, installs the parser's RefMap into the document
+    // with doc_set_refs, and returns the document
 ```
 
-Turning each leaf block's raw content into inline nodes is part 7, called by the driver between finish and render (below). The block's raw content reaches the inline part through `node_literal` (a clone, so a `Result` the inline part relays).
+Turning each leaf block's raw content into inline nodes is part 8, called by the driver between finish and render (below). The block's raw content reaches the inline part through `node_literal` (a clone, so a `Result` the inline part relays).
 
-## Part 7 — `inlines` (module `cm_inlines`)
+## Part 8 — `inlines` (module `cm_inlines`)
 
 ```
 process_inlines(doc: Document*, opts: Options) -> Result<NIL>
     // walks the tree under the iterator's mutation rule; for every Paragraph and
     // Heading node, parses its stored content into inline child nodes (Text, Code,
     // Emph, Strong, Link, Image, breaks, HtmlInline, CustomInline), looking link
-    // references up through doc_ref_lookup and using the buffer/utf8/scan services
-    // and cm_html's entity unescape as the import graph assigns them.
+    // references up through doc_ref_lookup, cleaning inline link destinations and
+    // titles through cm_escape, and using the buffer/utf8/scan services as the
+    // import graph assigns them.
 ```
 
 Emphasis, link and image construction follow cmark's `inlines.c`, including its delimiter-stack treatment of `*`/`_` and bracket stack for links.
 
-## Part 8 — `html` (module `cm_html`)
+## Part 9 — `html` (module `cm_html`)
 
-The renderer, and the escaping services (cmark's houdini files), which the inline part also uses.
+The renderer. Escaping itself lives in `cm_escape` (part 3); the renderer calls it.
 
 ```
 render_html(doc: Document, root: NodeRef, opts: Options) -> Result<string>
     // the whole document as HTML, owned by the caller
-escape_html_into(buf: Buffer*, base: string, c: Chunk, secure: bool) -> Result<NIL>
-    // append the chunk with & < > " escaped; secure also neutralises the
-    // insecure characters cmark's houdini lists
-escape_href_into(buf: Buffer*, base: string, c: Chunk) -> Result<NIL>
-    // append the chunk percent-escaped as an href, per houdini_escape_href
-unescape_entities_into(buf: Buffer*, base: string, c: Chunk) -> Result<NIL>
-    // append the chunk with entity and numeric character references replaced
-    // by their characters (the entities.inc table, generated — see PLAN.md)
 ```
 
-`render_html` walks with part 4's iterator and follows cmark's `html.c`, including: raw HTML is escaped unless `opts.unsafe`; dangerous URLs (`javascript:`, `vbscript:`, `file:`, and `data:` except image media types) are replaced by the empty string unless `opts.unsafe`; `sourcepos` adds `data-sourcepos="l:c-l:c"` to block elements.
+`render_html` walks with part 5's iterator and follows cmark's `html.c`, including: raw HTML is escaped unless `opts.unsafe`; dangerous URLs (`javascript:`, `vbscript:`, `file:`, and `data:` except image media types — `cm_scan`'s `scan_dangerous_url`) are replaced by the empty string unless `opts.unsafe`; `sourcepos` adds `data-sourcepos="l:c-l:c"` to block elements.
 
-## Part 9 — `driver` (module `cm_main`)
+## Part 10 — `driver` (module `cm_main`)
 
 The only executable part; the only `main` and `failsafe` in the project.
 
@@ -310,15 +340,15 @@ main: read all of stdin, or each named file in turn; convert; write HTML to stdo
 flags: --sourcepos --hardbreaks --nobreaks --unsafe --validate-utf8 --smart
 ```
 
-The driver's pipeline per input, which is also the project's definition of the whole conversion:
+The driver's pipeline per input, in the contract's own forms — also the project's definition of the whole conversion:
 
 ```
-parser = parser_new(opts)               // Result — relayed to the failsafe by ?!
-parser_feed(parser, input)              // once, with the whole input
-document = parser_finish(parser)        // the Document owns the RefMap now
-process_inlines(document, opts)
-consolidate_text_nodes(document, root)  // cmark calls this in finish; the port calls it here, after inlines
-html = render_html(document, root, opts)
+parser = parser_new(opts)?!
+parser_feed(@parser, input)?!
+document = parser_finish(move parser)?!
+process_inlines(@document, opts)?!
+consolidate_text_nodes(@document, doc_root(document))
+html = render_html(document, doc_root(document), opts)?!
 write html to stdout
 ```
 
