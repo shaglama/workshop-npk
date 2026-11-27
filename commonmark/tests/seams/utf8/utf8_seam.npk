@@ -1,0 +1,595 @@
+// Seam tests for cm_utf8, by Sonnet (Anthropic). Written from INTERFACES.md
+// Part 2 alone, the CommonMark spec's definitions of whitespace and punctuation,
+// and the Unicode standard (UTF-8 well-formedness, general categories, full case
+// folding). The part's source was not read. Raw bytes are built with buffer_putc
+// (a "\xNN" string escape would be a two-byte character).
+mod:utf8_seam;
+
+use "../../../src/buffer/cm_buffer.npk".*;
+use "../../../src/utf8/cm_utf8.npk".*;
+use "../../../../pin/lib/nstr.npk".nstr_eq;
+
+// ---- helpers -------------------------------------------------------------
+
+// n raw bytes taken from a, b, c, d in order.
+func:mk = string(int64:n, int64:a, int64:b, int64:c, int64:d) {
+    Buffer:buf = relay buffer_create();
+    if (n > 0i64) { relay buffer_putc(@buf, a); }
+    if (n > 1i64) { relay buffer_putc(@buf, b); }
+    if (n > 2i64) { relay buffer_putc(@buf, c); }
+    if (n > 3i64) { relay buffer_putc(@buf, d); }
+    pass raw buffer_detach(move(buf));
+};
+
+func:enc = string(int64:cp) {
+    Buffer:buf = relay buffer_create();
+    relay utf8_encode(cp, @buf);
+    pass raw buffer_detach(move(buf));
+};
+
+func:iter_is = bool(string:base, Chunk:c, int64:pos, int64:cp, int64:w) never fails {
+    Utf8Char:u = raw utf8_iterate(base, c, pos);
+    pass u.cp == cp && u.width == w;
+};
+
+// utf8_check of a chunk appended after a fixed prefix; returns prefix + result.
+func:check_after = string(string:prefix, string:base, Chunk:c) {
+    Buffer:buf = relay buffer_create();
+    relay buffer_puts(@buf, prefix);
+    relay utf8_check(base, c, @buf);
+    pass raw buffer_detach(move(buf));
+};
+
+func:check_all_of = string(string:base) {
+    pass relay check_after("", base, raw chunk_all(base));
+};
+
+func:fold_after = string(string:prefix, string:base, Chunk:c) {
+    Buffer:buf = relay buffer_create();
+    relay buffer_puts(@buf, prefix);
+    relay utf8_case_fold(base, c, @buf);
+    pass raw buffer_detach(move(buf));
+};
+
+func:fold = string(string:base) {
+    pass relay fold_after("", base, raw chunk_all(base));
+};
+
+func:fold_is = bool(string:input, string:expected) {
+    string:got = relay fold(input);
+    pass raw nstr_eq(got, expected);
+};
+
+// A string is valid UTF-8 when walking it by utf8_iterate never meets an invalid byte.
+func:walks_clean = bool(string:s) never fails {
+    Chunk:c = raw chunk_all(s);
+    int64:pos = 0i64;
+    while (pos < s.len) decreases s.len - pos {
+        Utf8Char:u = raw utf8_iterate(s, c, pos);
+        if (u.width < 1i64) { pass false; }
+        if (u.cp == 65533i64 && u.width == 1i64) {
+            // a real U+FFFD is three bytes EF BF BD; width 1 means an invalid byte
+            pass false;
+        }
+        pos = pos + u.width;
+    }
+    pass pos == s.len;
+};
+
+// ---- group 11: iterate, valid sequences ------------------------------------
+
+func:g_iterate_valid = bool() {
+    string:s = "a\u{e9}\u{20ac}\u{1f600}";
+    Chunk:all = raw chunk_all(s);
+    if (s.len != 10i64) { pass false; }
+    if (!(raw iter_is(s, all, 0i64, 97i64, 1i64))) { pass false; }
+    if (!(raw iter_is(s, all, 1i64, 233i64, 2i64))) { pass false; }
+    if (!(raw iter_is(s, all, 3i64, 8364i64, 3i64))) { pass false; }
+    if (!(raw iter_is(s, all, 6i64, 128512i64, 4i64))) { pass false; }
+
+    // positions are relative to the chunk, not the base
+    Chunk:mid = raw chunk_of(s, 1i64, 5i64);
+    if (!(raw iter_is(s, mid, 0i64, 233i64, 2i64))) { pass false; }
+    if (!(raw iter_is(s, mid, 2i64, 8364i64, 3i64))) { pass false; }
+    if (!(raw iter_is(s, mid, 5i64, 0i64, 0i64))) { pass false; }
+
+    // the exact boundaries of each length class
+    string:b2lo = relay mk(2i64, 194i64, 128i64, 0i64, 0i64);
+    string:b2hi = relay mk(2i64, 223i64, 191i64, 0i64, 0i64);
+    string:b3lo = relay mk(3i64, 224i64, 160i64, 128i64, 0i64);
+    string:b3a = relay mk(3i64, 237i64, 159i64, 191i64, 0i64);
+    string:b3b = relay mk(3i64, 238i64, 128i64, 128i64, 0i64);
+    string:b3hi = relay mk(3i64, 239i64, 191i64, 191i64, 0i64);
+    string:b4lo = relay mk(4i64, 240i64, 144i64, 128i64, 128i64);
+    string:b4hi = relay mk(4i64, 244i64, 143i64, 191i64, 191i64);
+    if (!(raw iter_is(b2lo, raw chunk_all(b2lo), 0i64, 128i64, 2i64))) { pass false; }
+    if (!(raw iter_is(b2hi, raw chunk_all(b2hi), 0i64, 2047i64, 2i64))) { pass false; }
+    if (!(raw iter_is(b3lo, raw chunk_all(b3lo), 0i64, 2048i64, 3i64))) { pass false; }
+    if (!(raw iter_is(b3a, raw chunk_all(b3a), 0i64, 55295i64, 3i64))) { pass false; }
+    if (!(raw iter_is(b3b, raw chunk_all(b3b), 0i64, 57344i64, 3i64))) { pass false; }
+    if (!(raw iter_is(b3hi, raw chunk_all(b3hi), 0i64, 65535i64, 3i64))) { pass false; }
+    if (!(raw iter_is(b4lo, raw chunk_all(b4lo), 0i64, 65536i64, 4i64))) { pass false; }
+    if (!(raw iter_is(b4hi, raw chunk_all(b4hi), 0i64, 1114111i64, 4i64))) { pass false; }
+
+    // a NUL byte is a character of width 1, unlike the end of the chunk
+    string:nul = relay mk(2i64, 0i64, 65i64, 0i64, 0i64);
+    if (!(raw iter_is(nul, raw chunk_all(nul), 0i64, 0i64, 1i64))) { pass false; }
+    if (!(raw iter_is(nul, raw chunk_all(nul), 1i64, 65i64, 1i64))) { pass false; }
+
+    // a real U+FFFD in the text is a character of width 3
+    string:repl = relay mk(3i64, 239i64, 191i64, 189i64, 0i64);
+    pass raw iter_is(repl, raw chunk_all(repl), 0i64, 65533i64, 3i64);
+};
+
+// ---- group 12: iterate, invalid sequences ------------------------------------
+
+// Each sequence is followed by 'x'. The first byte is invalid: { U+FFFD, 1 }.
+func:bad_lead = bool(int64:n, int64:a, int64:b, int64:c, int64:d) {
+    string:s = relay mk(n, a, b, c, d);
+    string:t = string_concat(s, "x");
+    pass raw iter_is(t, raw chunk_all(t), 0i64, 65533i64, 1i64);
+};
+
+func:g_iterate_invalid = bool() {
+    if (!(relay bad_lead(1i64, 128i64, 0i64, 0i64, 0i64))) { pass false; }   // lone continuation
+    if (!(relay bad_lead(1i64, 191i64, 0i64, 0i64, 0i64))) { pass false; }
+    if (!(relay bad_lead(1i64, 255i64, 0i64, 0i64, 0i64))) { pass false; }
+    if (!(relay bad_lead(1i64, 254i64, 0i64, 0i64, 0i64))) { pass false; }
+    if (!(relay bad_lead(1i64, 248i64, 0i64, 0i64, 0i64))) { pass false; }   // 5-byte lead
+    if (!(relay bad_lead(2i64, 192i64, 128i64, 0i64, 0i64))) { pass false; }   // overlong NUL
+    if (!(relay bad_lead(2i64, 193i64, 191i64, 0i64, 0i64))) { pass false; }   // overlong DEL
+    if (!(relay bad_lead(3i64, 224i64, 128i64, 128i64, 0i64))) { pass false; }
+    if (!(relay bad_lead(3i64, 224i64, 159i64, 191i64, 0i64))) { pass false; }
+    if (!(relay bad_lead(3i64, 237i64, 160i64, 128i64, 0i64))) { pass false; } // surrogate D800
+    if (!(relay bad_lead(3i64, 237i64, 191i64, 191i64, 0i64))) { pass false; } // surrogate DFFF
+    if (!(relay bad_lead(4i64, 240i64, 128i64, 128i64, 128i64))) { pass false; }
+    if (!(relay bad_lead(4i64, 240i64, 143i64, 191i64, 191i64))) { pass false; }
+    if (!(relay bad_lead(4i64, 244i64, 144i64, 128i64, 128i64))) { pass false; } // > U+10FFFF
+    if (!(relay bad_lead(4i64, 245i64, 128i64, 128i64, 128i64))) { pass false; }
+    // a lead byte whose continuation is missing or wrong
+    if (!(relay bad_lead(1i64, 195i64, 0i64, 0i64, 0i64))) { pass false; }      // followed by 'x'
+    if (!(relay bad_lead(2i64, 226i64, 130i64, 0i64, 0i64))) { pass false; }   // 3-byte cut short
+    if (!(relay bad_lead(3i64, 240i64, 159i64, 152i64, 0i64))) { pass false; } // 4-byte cut short
+
+    // after a bad lead the walk resumes at the very next byte
+    string:s = relay mk(2i64, 195i64, 65i64, 0i64, 0i64);
+    Chunk:c = raw chunk_all(s);
+    if (!(raw iter_is(s, c, 0i64, 65533i64, 1i64))) { pass false; }
+    if (!(raw iter_is(s, c, 1i64, 65i64, 1i64))) { pass false; }
+
+    // a sequence cut by the end of the chunk, though the base goes on
+    string:full = "a\u{20ac}\u{1f600}z";
+    Chunk:cut3 = raw chunk_of(full, 0i64, 3i64);   // a, E2 82
+    if (!(raw iter_is(full, cut3, 0i64, 97i64, 1i64))) { pass false; }
+    if (!(raw iter_is(full, cut3, 1i64, 65533i64, 1i64))) { pass false; }
+    if (!(raw iter_is(full, cut3, 2i64, 65533i64, 1i64))) { pass false; }
+    if (!(raw iter_is(full, cut3, 3i64, 0i64, 0i64))) { pass false; }
+    Chunk:cut_emoji = raw chunk_of(full, 4i64, 3i64);   // F0 9F 98 of the emoji
+    if (!(raw iter_is(full, cut_emoji, 0i64, 65533i64, 1i64))) { pass false; }
+    // and starting inside a character
+    Chunk:inside = raw chunk_of(full, 2i64, 2i64);      // 82 AC
+    if (!(raw iter_is(full, inside, 0i64, 65533i64, 1i64))) { pass false; }
+    pass raw iter_is(full, inside, 1i64, 65533i64, 1i64);
+};
+
+// ---- group 13: iterate at and past the end -----------------------------------
+
+func:g_iterate_end = bool() {
+    string:s = "ab";
+    Chunk:all = raw chunk_all(s);
+    if (!(raw iter_is(s, all, 2i64, 0i64, 0i64))) { pass false; }
+    if (!(raw iter_is(s, all, 3i64, 0i64, 0i64))) { pass false; }
+    if (!(raw iter_is(s, all, 1000i64, 0i64, 0i64))) { pass false; }
+    // the chunk's end, not the base's
+    Chunk:first = raw chunk_of(s, 0i64, 1i64);
+    if (!(raw iter_is(s, first, 0i64, 97i64, 1i64))) { pass false; }
+    if (!(raw iter_is(s, first, 1i64, 0i64, 0i64))) { pass false; }
+    Chunk:none = raw chunk_of(s, 1i64, 0i64);
+    if (!(raw iter_is(s, none, 0i64, 0i64, 0i64))) { pass false; }
+    string:empty = "";
+    pass raw iter_is(empty, raw chunk_all(empty), 0i64, 0i64, 0i64);
+};
+
+// ---- group 14: encode, absolute bytes --------------------------------------
+
+func:enc_is = bool(int64:cp, int64:n, int64:a, int64:b, int64:c, int64:d) {
+    string:got = relay enc(cp);
+    string:want = relay mk(n, a, b, c, d);
+    pass raw nstr_eq(got, want) && got.len == n;
+};
+
+func:g_encode = bool() {
+    if (!(relay enc_is(0i64, 1i64, 0i64, 0i64, 0i64, 0i64))) { pass false; }
+    if (!(relay enc_is(36i64, 1i64, 36i64, 0i64, 0i64, 0i64))) { pass false; }
+    if (!(relay enc_is(127i64, 1i64, 127i64, 0i64, 0i64, 0i64))) { pass false; }
+    if (!(relay enc_is(128i64, 2i64, 194i64, 128i64, 0i64, 0i64))) { pass false; }
+    if (!(relay enc_is(162i64, 2i64, 194i64, 162i64, 0i64, 0i64))) { pass false; }
+    if (!(relay enc_is(2047i64, 2i64, 223i64, 191i64, 0i64, 0i64))) { pass false; }
+    if (!(relay enc_is(2048i64, 3i64, 224i64, 160i64, 128i64, 0i64))) { pass false; }
+    if (!(relay enc_is(8364i64, 3i64, 226i64, 130i64, 172i64, 0i64))) { pass false; }
+    if (!(relay enc_is(55295i64, 3i64, 237i64, 159i64, 191i64, 0i64))) { pass false; }
+    if (!(relay enc_is(57344i64, 3i64, 238i64, 128i64, 128i64, 0i64))) { pass false; }
+    if (!(relay enc_is(65533i64, 3i64, 239i64, 191i64, 189i64, 0i64))) { pass false; }
+    if (!(relay enc_is(65535i64, 3i64, 239i64, 191i64, 191i64, 0i64))) { pass false; }
+    if (!(relay enc_is(65536i64, 4i64, 240i64, 144i64, 128i64, 128i64))) { pass false; }
+    if (!(relay enc_is(66376i64, 4i64, 240i64, 144i64, 141i64, 136i64))) { pass false; }
+    if (!(relay enc_is(128512i64, 4i64, 240i64, 159i64, 152i64, 128i64))) { pass false; }
+    if (!(relay enc_is(1114111i64, 4i64, 244i64, 143i64, 191i64, 191i64))) { pass false; }
+
+    // encode appends: earlier contents stay, successive calls concatenate
+    Buffer:buf = relay buffer_create();
+    relay buffer_puts(@buf, "<");
+    relay utf8_encode(233i64, @buf);
+    relay utf8_encode(65i64, @buf);
+    relay utf8_encode(128512i64, @buf);
+    relay buffer_puts(@buf, ">");
+    if (raw buffer_len(buf) != 1i64 + 2i64 + 1i64 + 4i64 + 1i64) { pass false; }
+    string:out = raw buffer_detach(move(buf));
+    pass raw nstr_eq(out, "<\u{e9}A\u{1f600}>");
+};
+
+// ---- group 15: encode/iterate round trip over the whole range -------------------
+
+func:g_roundtrip = bool() {
+    int64:cp = 0i64;
+    while (cp <= 1114111i64) decreases 1114112i64 - cp {
+        if (cp >= 55296i64 && cp <= 57343i64) {
+            cp = 57344i64;
+        }
+        string:s = relay enc(cp);
+        int64:want = 4i64;
+        if (cp < 128i64) { want = 1i64; }
+        else if (cp < 2048i64) { want = 2i64; }
+        else if (cp < 65536i64) { want = 3i64; }
+        if (s.len != want) { pass false; }
+        if (!(raw iter_is(s, raw chunk_all(s), 0i64, cp, want))) { pass false; }
+        // inside a bigger base, with neighbours that must not matter
+        string:wrapped = string_concat(string_concat("<", s), ">");
+        if (!(raw iter_is(wrapped, raw chunk_of(wrapped, 1i64, want), 0i64, cp, want))) { pass false; }
+        if (!(raw iter_is(wrapped, raw chunk_all(wrapped), 1i64, cp, want))) { pass false; }
+        cp = cp + 53i64;
+    }
+    // the sample step skips these; test every boundary explicitly
+    int64:edge = 0i64;
+    while (edge < 14i64) decreases 14i64 - edge {
+        int64:e = 0i64;
+        if (edge == 0i64) { e = 127i64; }
+        if (edge == 1i64) { e = 128i64; }
+        if (edge == 2i64) { e = 2047i64; }
+        if (edge == 3i64) { e = 2048i64; }
+        if (edge == 4i64) { e = 55295i64; }
+        if (edge == 5i64) { e = 57344i64; }
+        if (edge == 6i64) { e = 65535i64; }
+        if (edge == 7i64) { e = 65536i64; }
+        if (edge == 8i64) { e = 1114111i64; }
+        if (edge == 9i64) { e = 65533i64; }
+        if (edge == 10i64) { e = 937i64; }
+        if (edge == 11i64) { e = 20013i64; }
+        if (edge == 12i64) { e = 128169i64; }
+        if (edge == 13i64) { e = 65i64; }
+        string:s = relay enc(e);
+        string:back = relay check_all_of(s);
+        if (!(raw nstr_eq(s, back))) { pass false; }
+        if (!(raw iter_is(s, raw chunk_all(s), 0i64, e, s.len))) { pass false; }
+        edge = edge + 1i64;
+    }
+    pass true;
+};
+
+// ---- group 16: check leaves valid text alone ---------------------------------------
+
+func:g_check_valid = bool() {
+    string:empty = "";
+    string:r0 = relay check_all_of(empty);
+    if (r0.len != 0i64) { pass false; }
+    string:ascii = "plain ASCII, with\ttabs\nand lines\r\n";
+    string:r1 = relay check_all_of(ascii);
+    if (!(raw nstr_eq(r1, ascii))) { pass false; }
+    string:mixed = "a\u{e9}\u{20ac}\u{1f600}z \u{fffd} \u{4e2d}\u{6587}";
+    string:r2 = relay check_all_of(mixed);
+    if (!(raw nstr_eq(r2, mixed))) { pass false; }
+
+    // the chunk is what is checked and copied; the prefix stays
+    string:base = "[[a\u{e9}b]]";
+    Chunk:c = raw chunk_of(base, 2i64, 4i64);
+    string:r3 = relay check_after(">>", base, c);
+    if (!(raw nstr_eq(r3, ">>a\u{e9}b"))) { pass false; }
+    Chunk:none = raw chunk_of(base, 3i64, 0i64);
+    string:r4 = relay check_after("keep", base, none);
+    pass raw nstr_eq(r4, "keep");
+};
+
+// ---- group 17: check repairs invalid sequences -----------------------------------------
+
+func:repl_is = bool(string:input, string:expected) {
+    string:got = relay check_all_of(input);
+    pass raw nstr_eq(got, expected);
+};
+
+func:g_check_invalid = bool() {
+    string:fffd = "\u{fffd}";
+    if (fffd.len != 3i64) { pass false; }
+
+    string:s1 = relay mk(3i64, 97i64, 255i64, 98i64, 0i64);                // a FF b
+    if (!(relay repl_is(s1, "a\u{fffd}b"))) { pass false; }
+    string:s2 = relay mk(1i64, 128i64, 0i64, 0i64, 0i64);                   // lone continuation
+    if (!(relay repl_is(s2, "\u{fffd}"))) { pass false; }
+    string:s3 = relay mk(2i64, 254i64, 255i64, 0i64, 0i64);               // two bad bytes
+    string:r3 = relay check_all_of(s3);
+    if (r3.len != 6i64) { pass false; }
+    if (!(raw nstr_eq(r3, "\u{fffd}\u{fffd}"))) { pass false; }
+    string:s4 = relay mk(3i64, 237i64, 160i64, 128i64, 0i64);            // encoded surrogate
+    string:r4 = relay check_all_of(s4);
+    if (!(raw walks_clean(r4))) { pass false; }
+    if (r4.len == 0i64) { pass false; }
+    string:s5 = relay mk(2i64, 192i64, 128i64, 0i64, 0i64);               // overlong NUL
+    string:r5 = relay check_all_of(s5);
+    if (!(raw walks_clean(r5))) { pass false; }
+
+    // text around a bad byte survives unchanged
+    string:mid = relay mk(1i64, 255i64, 0i64, 0i64, 0i64);
+    string:s6 = string_concat(string_concat("\u{e9}\u{20ac}", mid), "\u{1f600}z");
+    if (!(relay repl_is(s6, "\u{e9}\u{20ac}\u{fffd}\u{1f600}z"))) { pass false; }
+
+    // valid text is a fixed point of check; repaired text too
+    string:r6 = relay check_all_of(s6);
+    string:r6b = relay check_all_of(r6);
+    if (!(raw nstr_eq(r6, r6b))) { pass false; }
+
+    // a sequence the chunk cuts short is repaired, not copied raw, and the
+    // bytes beyond the chunk are not read
+    string:full = "a\u{20ac}\u{1f600}z";
+    Chunk:cut = raw chunk_of(full, 0i64, 3i64);                            // a E2 82
+    string:r7 = relay check_after("", full, cut);
+    if (!(raw walks_clean(r7))) { pass false; }
+    if (r7.len < 4i64) { pass false; }
+    if (r7.ptr[0i64] != 97u8) { pass false; }
+    string:r7b = relay check_all_of(r7);
+    if (!(raw nstr_eq(r7, r7b))) { pass false; }
+    // and a chunk starting inside a character
+    Chunk:inside = raw chunk_of(full, 2i64, 2i64);                         // 82 AC
+    string:r8 = relay check_after("<", full, inside);
+    if (!(raw walks_clean(r8))) { pass false; }
+    if (r8.ptr[0i64] != 60u8) { pass false; }
+    if (r8.len < 4i64) { pass false; }
+
+    // every repaired string is well formed, over a run of mixed bytes
+    Buffer:b = relay buffer_create();
+    int64:i = 0i64;
+    while (i < 1024i64) decreases 1024i64 - i {
+        relay buffer_putc(@b, (i * 7i64 + i / 5i64) % 256i64);
+        i = i + 1i64;
+    }
+    string:noise = raw buffer_detach(move(b));
+    string:r9 = relay check_all_of(noise);
+    if (!(raw walks_clean(r9))) { pass false; }
+    string:r9b = relay check_all_of(r9);
+    pass raw nstr_eq(r9, r9b);
+};
+
+// ---- group 18: utf8_is_space ----------------------------------------------------
+
+func:g_space = bool() {
+    // the spec's Unicode whitespace: Zs, tab, line feed, form feed, carriage return
+    int64:yes_count = 0i64;
+    int64:cp = 0i64;
+    while (cp < 128i64) decreases 128i64 - cp {
+        bool:want = cp == 9i64 || cp == 10i64 || cp == 12i64 || cp == 13i64 || cp == 32i64;
+        if (raw utf8_is_space(cp) != want) { pass false; }
+        cp = cp + 1i64;
+    }
+    if (!(raw utf8_is_space(160i64))) { pass false; }      // no-break space
+    if (!(raw utf8_is_space(5760i64))) { pass false; }
+    cp = 8192i64;
+    while (cp <= 8202i64) decreases 8203i64 - cp {
+        if (!(raw utf8_is_space(cp))) { pass false; }
+        cp = cp + 1i64;
+    }
+    if (!(raw utf8_is_space(8239i64))) { pass false; }
+    if (!(raw utf8_is_space(8287i64))) { pass false; }
+    if (!(raw utf8_is_space(12288i64))) { pass false; }
+    // not whitespace by the spec's definition
+    if (raw utf8_is_space(11i64)) { pass false; }          // line tabulation
+    if (raw utf8_is_space(133i64)) { pass false; }          // next line (Cc)
+    if (raw utf8_is_space(6158i64)) { pass false; }        // Mongolian vowel separator (Cf)
+    if (raw utf8_is_space(8203i64)) { pass false; }        // zero width space (Cf)
+    if (raw utf8_is_space(8204i64)) { pass false; }
+    if (raw utf8_is_space(8232i64)) { pass false; }        // line separator (Zl)
+    if (raw utf8_is_space(8233i64)) { pass false; }        // paragraph separator (Zp)
+    if (raw utf8_is_space(65279i64)) { pass false; }        // BOM / ZWNBSP (Cf)
+    if (raw utf8_is_space(8288i64)) { pass false; }
+    if (raw utf8_is_space(233i64)) { pass false; }
+    if (raw utf8_is_space(20013i64)) { pass false; }
+    if (raw utf8_is_space(1114111i64)) { pass false; }
+    if (raw utf8_is_space(128512i64)) { pass false; }
+    pass !(raw utf8_is_space(65533i64));
+};
+
+// ---- group 19: utf8_is_punct, ASCII --------------------------------------------------
+
+func:g_punct_ascii = bool() {
+    // ASCII punctuation per the spec: 21-2F, 3A-40, 5B-60, 7B-7E (symbols included)
+    int64:cp = 0i64;
+    while (cp < 128i64) decreases 128i64 - cp {
+        bool:want = (cp >= 33i64 && cp <= 47i64) || (cp >= 58i64 && cp <= 64i64)
+                    || (cp >= 91i64 && cp <= 96i64) || (cp >= 123i64 && cp <= 126i64);
+        if (raw utf8_is_punct(cp) != want) { pass false; }
+        cp = cp + 1i64;
+    }
+    pass true;
+};
+
+// ---- group 20: utf8_is_punct, beyond ASCII -----------------------------------------------
+
+func:g_punct_unicode = bool() {
+    // punctuation (P*) or symbol (S*), as cmark's name says
+    if (!(raw utf8_is_punct(161i64))) { pass false; }   // inverted exclamation, Po
+    if (!(raw utf8_is_punct(162i64))) { pass false; }   // cent, Sc
+    if (!(raw utf8_is_punct(163i64))) { pass false; }
+    if (!(raw utf8_is_punct(165i64))) { pass false; }
+    if (!(raw utf8_is_punct(167i64))) { pass false; }   // section, Po
+    if (!(raw utf8_is_punct(168i64))) { pass false; }   // diaeresis, Sk
+    if (!(raw utf8_is_punct(169i64))) { pass false; }   // copyright, So
+    if (!(raw utf8_is_punct(171i64))) { pass false; }   // guillemet, Pi
+    if (!(raw utf8_is_punct(172i64))) { pass false; }   // not sign, Sm
+    if (!(raw utf8_is_punct(174i64))) { pass false; }
+    if (!(raw utf8_is_punct(176i64))) { pass false; }   // degree, So
+    if (!(raw utf8_is_punct(177i64))) { pass false; }   // plus-minus, Sm
+    if (!(raw utf8_is_punct(180i64))) { pass false; }   // acute accent, Sk
+    if (!(raw utf8_is_punct(182i64))) { pass false; }   // pilcrow, Po
+    if (!(raw utf8_is_punct(183i64))) { pass false; }   // middle dot, Po
+    if (!(raw utf8_is_punct(187i64))) { pass false; }   // guillemet, Pf
+    if (!(raw utf8_is_punct(191i64))) { pass false; }
+    if (!(raw utf8_is_punct(215i64))) { pass false; }   // multiplication, Sm
+    if (!(raw utf8_is_punct(247i64))) { pass false; }
+    if (!(raw utf8_is_punct(8208i64))) { pass false; } // hyphen, Pd
+    if (!(raw utf8_is_punct(8212i64))) { pass false; } // em dash
+    if (!(raw utf8_is_punct(8216i64))) { pass false; } // curly quotes, Pi/Pf
+    if (!(raw utf8_is_punct(8220i64))) { pass false; }
+    if (!(raw utf8_is_punct(8230i64))) { pass false; } // ellipsis, Po
+    if (!(raw utf8_is_punct(8364i64))) { pass false; } // euro, Sc
+    if (!(raw utf8_is_punct(8482i64))) { pass false; } // trade mark, So
+    if (!(raw utf8_is_punct(8592i64))) { pass false; } // arrow, Sm
+    if (!(raw utf8_is_punct(8704i64))) { pass false; } // for all, Sm
+    if (!(raw utf8_is_punct(9731i64))) { pass false; } // snowman, So
+    if (!(raw utf8_is_punct(12289i64))) { pass false; } // ideographic comma, Po
+    if (!(raw utf8_is_punct(12290i64))) { pass false; }
+    if (!(raw utf8_is_punct(12300i64))) { pass false; } // corner bracket, Ps
+    if (!(raw utf8_is_punct(65281i64))) { pass false; } // fullwidth !
+    if (!(raw utf8_is_punct(128512i64))) { pass false; } // emoji, So
+
+    // letters, digits, marks, separators, controls and format characters are not
+    if (raw utf8_is_punct(170i64)) { pass false; }      // feminine ordinal, Lo
+    if (raw utf8_is_punct(181i64)) { pass false; }      // micro, Ll
+    if (raw utf8_is_punct(186i64)) { pass false; }
+    if (raw utf8_is_punct(178i64)) { pass false; }      // superscript two, No
+    if (raw utf8_is_punct(189i64)) { pass false; }      // one half, No
+    if (raw utf8_is_punct(160i64)) { pass false; }      // no-break space, Zs
+    if (raw utf8_is_punct(173i64)) { pass false; }      // soft hyphen, Cf
+    if (raw utf8_is_punct(128i64)) { pass false; }      // Cc
+    if (raw utf8_is_punct(233i64)) { pass false; }
+    if (raw utf8_is_punct(192i64)) { pass false; }
+    if (raw utf8_is_punct(937i64)) { pass false; }
+    if (raw utf8_is_punct(1046i64)) { pass false; }
+    if (raw utf8_is_punct(768i64)) { pass false; }     // combining grave, Mn
+    if (raw utf8_is_punct(1632i64)) { pass false; }     // Arabic-indic zero, Nd
+    if (raw utf8_is_punct(8232i64)) { pass false; }
+    if (raw utf8_is_punct(8203i64)) { pass false; }
+    if (raw utf8_is_punct(12288i64)) { pass false; }
+    if (raw utf8_is_punct(12354i64)) { pass false; }    // hiragana
+    if (raw utf8_is_punct(20013i64)) { pass false; }    // CJK
+    if (raw utf8_is_punct(44032i64)) { pass false; }    // Hangul
+    if (raw utf8_is_punct(57344i64)) { pass false; }    // private use
+    if (raw utf8_is_punct(1114111i64)) { pass false; }
+    pass !(raw utf8_is_punct(65536i64));               // Linear B syllable, Lo
+};
+
+// ---- group 21: case folding, absolute results -------------------------------------------
+
+func:g_fold = bool() {
+    if (!(relay fold_is("Hello, WORLD 42!", "hello, world 42!"))) { pass false; }
+    if (!(relay fold_is("", ""))) { pass false; }
+    if (!(relay fold_is("\u{c4}\u{c9}\u{d6}", "\u{e4}\u{e9}\u{f6}"))) { pass false; }
+    if (!(relay fold_is("\u{e4}\u{e9}", "\u{e4}\u{e9}"))) { pass false; }
+    // full folding: one character becomes several
+    if (!(relay fold_is("\u{df}", "ss"))) { pass false; }               // sharp s
+    if (!(relay fold_is("Stra\u{df}e", "strasse"))) { pass false; }
+    if (!(relay fold_is("\u{1e9e}", "ss"))) { pass false; }             // capital sharp s (spec ex.)
+    if (!(relay fold_is("SS", "ss"))) { pass false; }
+    if (!(relay fold_is("\u{fb01}", "fi"))) { pass false; }             // fi ligature
+    if (!(relay fold_is("\u{fb03}", "ffi"))) { pass false; }            // ffi ligature
+    if (!(relay fold_is("\u{130}", "i\u{307}"))) { pass false; }        // I with dot above
+    if (!(relay fold_is("\u{149}", "\u{2bc}n"))) { pass false; }
+    // simple folds outside Latin-1
+    if (!(relay fold_is("\u{3a3}", "\u{3c3}"))) { pass false; }         // Sigma
+    if (!(relay fold_is("\u{3c2}", "\u{3c3}"))) { pass false; }         // final sigma
+    if (!(relay fold_is("\u{3a9}", "\u{3c9}"))) { pass false; }         // Omega
+    if (!(relay fold_is("\u{b5}", "\u{3bc}"))) { pass false; }          // micro sign -> mu
+    if (!(relay fold_is("\u{212a}", "k"))) { pass false; }              // Kelvin sign
+    if (!(relay fold_is("\u{17f}", "s"))) { pass false; }               // long s
+    if (!(relay fold_is("\u{410}\u{411}\u{412}", "\u{430}\u{431}\u{432}"))) { pass false; }
+    if (!(relay fold_is("\u{1c5}", "\u{1c6}"))) { pass false; }         // titlecase dz-caron
+    if (!(relay fold_is("\u{10400}", "\u{10428}"))) { pass false; }     // Deseret, 4-byte
+    // characters without a fold pass through unchanged
+    if (!(relay fold_is("\u{4e2d}\u{6587}\u{1f600}\u{20ac}-_.", "\u{4e2d}\u{6587}\u{1f600}\u{20ac}-_."))) { pass false; }
+    if (!(relay fold_is("\u{e9}\u{fffd}9", "\u{e9}\u{fffd}9"))) { pass false; }
+
+    // ASCII, character by character
+    int64:cp = 1i64;
+    while (cp < 128i64) decreases 128i64 - cp {
+        int64:want = cp;
+        if (cp >= 65i64 && cp <= 90i64) { want = cp + 32i64; }
+        string:src = relay enc(cp);
+        string:ex = relay enc(want);
+        if (!(relay fold_is(src, ex))) { pass false; }
+        cp = cp + 1i64;
+    }
+    pass true;
+};
+
+// ---- group 22: case folding, chunks, appending, idempotence -----------------------------------
+
+func:g_fold_chunks = bool() {
+    // only the chunk is folded and appended, after what the buffer holds
+    string:base = "AB\u{df}CD\u{3a3}EF";
+    Chunk:c2 = raw chunk_of(base, 2i64, 2i64);      // the sharp s alone
+    string:r1 = relay fold_after("[", base, c2);
+    if (!(raw nstr_eq(r1, "[ss"))) { pass false; }
+    Chunk:c3 = raw chunk_of(base, 4i64, 2i64);      // C D
+    string:r2 = relay fold_after("<<", base, c3);
+    if (!(raw nstr_eq(r2, "<<cd"))) { pass false; }
+    Chunk:c4 = raw chunk_of(base, 6i64, 4i64);      // sigma E F
+    string:r3 = relay fold_after("", base, c4);
+    if (!(raw nstr_eq(r3, "\u{3c3}ef"))) { pass false; }
+    Chunk:none = raw chunk_of(base, 3i64, 0i64);
+    string:r4 = relay fold_after("kept", base, none);
+    if (!(raw nstr_eq(r4, "kept"))) { pass false; }
+    Chunk:all = raw chunk_all(base);
+    string:r5 = relay fold_after("", base, all);
+    if (!(raw nstr_eq(r5, "abssc\u{64}\u{3c3}ef"))) { pass false; }
+
+    // folding twice is folding once
+    string:samples = "Stra\u{df}e \u{130} \u{1e9e} \u{3a3}\u{3c2} \u{fb03} \u{212a} \u{c9}COLE \u{410} \u{10400} MiXeD 123";
+    string:f1 = relay fold(samples);
+    string:f2 = relay fold(f1);
+    if (!(raw nstr_eq(f1, f2))) { pass false; }
+
+    // case-insensitive equality of the kind reference labels need
+    string:a = relay fold("Stra\u{df}e");
+    string:b = relay fold("STRASSE");
+    string:d = relay fold("\u{1e9e}");
+    string:e = relay fold("SS");
+    pass raw nstr_eq(a, b) && raw nstr_eq(d, e);
+};
+
+func:check_all = int32() {
+    if (!(relay g_iterate_valid())) { pass 11i32; }
+    if (!(relay g_iterate_invalid())) { pass 12i32; }
+    if (!(relay g_iterate_end())) { pass 13i32; }
+    if (!(relay g_encode())) { pass 14i32; }
+    if (!(relay g_roundtrip())) { pass 15i32; }
+    if (!(relay g_check_valid())) { pass 16i32; }
+    if (!(relay g_check_invalid())) { pass 17i32; }
+    if (!(relay g_space())) { pass 18i32; }
+    if (!(relay g_punct_ascii())) { pass 19i32; }
+    if (!(relay g_punct_unicode())) { pass 20i32; }
+    if (!(relay g_fold())) { pass 21i32; }
+    if (!(relay g_fold_chunks())) { pass 22i32; }
+    pass 0i32;
+};
+
+func:main = int32(cstring[]:_~argv) {
+    Result<int32>:outcome = check_all();
+    if (outcome.is_error) { !!! outcome.err; }
+    exit outcome.value;
+};
+
+// Any returned error is forwarded here unchanged by main.
+func:failsafe = int32(Error:err) {
+    pick (err) {
+        (Unreachable, HeapOom, HeapBadRequest, WildLeak, StackExhausted,
+         MachineFault, DivByZero, DivOverflow, IntOverflow, OutOfBounds,
+         DecreasesViolated) { exit 100i32; },
+        (*) { exit 100i32; }
+    }
+};
