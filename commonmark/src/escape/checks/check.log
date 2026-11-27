@@ -1,0 +1,132 @@
+# Check log — Part 3: `escape` (module `cm_escape`)
+
+Writer: Neon (Google)
+Compiler commit: 3a45b7c4 (public pin supplied with this workspace)
+npkc sha256: 23022ef161268018fb83227c8f5f0f26d80917eff715af738c7e7e54a41f90a0
+npkrt.o sha256: c8e5033ad17c70f838d567157738a6cc046af0ca3140ad92259fa71f0e747b4e
+Writer checks: every Part 3 function; independent seam suite by Sol is separate.
+Expected: exit 0 and the six literal PASS lines below, at both -O0 and -O2.
+
+$ opt-20 --version
+exit: 0
+stdout: Ubuntu LLVM version 20.1.2
+  Optimized build.
+  Default target: x86_64-pc-linux-gnu
+  Host CPU: skylake-avx512
+stderr: (empty)
+$ llc-20 --version
+exit: 0
+stdout: Ubuntu LLVM version 20.1.2
+  Optimized build.
+  Default target: x86_64-pc-linux-gnu
+  Host CPU: skylake-avx512
+
+  Registered Targets:
+    aarch64     - AArch64 (little endian)
+    aarch64_32  - AArch64 (little endian ILP32)
+    aarch64_be  - AArch64 (big endian)
+    amdgcn      - AMD GCN GPUs
+    arm         - ARM
+    arm64       - ARM64 (little endian)
+    arm64_32    - ARM64 (little endian ILP32)
+    armeb       - ARM (big endian)
+    avr         - Atmel AVR Microcontroller
+    bpf         - BPF (host endian)
+    bpfeb       - BPF (big endian)
+    bpfel       - BPF (little endian)
+    hexagon     - Hexagon
+    lanai       - Lanai
+    loongarch32 - 32-bit LoongArch
+    loongarch64 - 64-bit LoongArch
+    m68k        - Motorola 68000 family
+    mips        - MIPS (32-bit big endian)
+    mips64      - MIPS (64-bit big endian)
+    mips64el    - MIPS (64-bit little endian)
+    mipsel      - MIPS (32-bit little endian)
+    msp430      - MSP430 [experimental]
+    nvptx       - NVIDIA PTX 32-bit
+    nvptx64     - NVIDIA PTX 64-bit
+    ppc32       - PowerPC 32
+    ppc32le     - PowerPC 32 LE
+    ppc64       - PowerPC 64
+    ppc64le     - PowerPC 64 LE
+    r600        - AMD GPUs HD2XXX-HD6XXX
+    riscv32     - 32-bit RISC-V
+    riscv64     - 64-bit RISC-V
+    sparc       - Sparc
+    sparcel     - Sparc LE
+    sparcv9     - Sparc V9
+    spirv       - SPIR-V Logical
+    spirv32     - SPIR-V 32-bit
+    spirv64     - SPIR-V 64-bit
+    systemz     - SystemZ
+    thumb       - Thumb
+    thumbeb     - Thumb (big endian)
+    ve          - VE
+    wasm32      - WebAssembly 32-bit
+    wasm64      - WebAssembly 64-bit
+    x86         - 32-bit X86: Pentium-Pro and above
+    x86-64      - 64-bit X86: EM64T and AMD64
+    xcore       - XCore
+    xtensa      - Xtensa 32
+stderr: (empty)
+$ ld.lld-20 --version
+exit: 0
+stdout: Ubuntu LLD 20.1.2 (compatible with GNU linkers)
+stderr: (empty)
+
+Compile to LLVM IR:
+$ pin/npkc commonmark/src/escape/checks/check_escape.npk -o commonmark/src/escape/checks/build/check_escape.ll
+exit: 0
+stdout: (empty)
+stderr: (empty)
+
+-O0 build and run:
+$ opt-20 -O0 -S commonmark/src/escape/checks/build/check_escape.ll -o commonmark/src/escape/checks/build/check_escape.O0.ll
+exit: 0
+stdout: (empty)
+stderr: (empty)
+$ llc-20 -O0 -filetype=obj -relocation-model=static commonmark/src/escape/checks/build/check_escape.O0.ll -o commonmark/src/escape/checks/build/check_escape.O0.o
+exit: 0
+stdout: (empty)
+stderr: (empty)
+$ ld.lld-20 -static -o commonmark/src/escape/checks/build/check_escape.O0 commonmark/src/escape/checks/build/check_escape.O0.o pin/npkrt.o
+exit: 0
+stdout: (empty)
+stderr: (empty)
+$ commonmark/src/escape/checks/build/check_escape.O0
+exit: 0
+stdout: PASS: escape_html_into
+PASS: escape_href_into
+PASS: unescape_entities_into
+PASS: unescape_backslashes_into
+PASS: clean_url & clean_title
+ALL cm_escape CHECKS PASSED
+stderr: (empty)
+-O0: PASS
+
+-O2 build and run:
+$ opt-20 -O2 -S commonmark/src/escape/checks/build/check_escape.ll -o commonmark/src/escape/checks/build/check_escape.O2.ll
+exit: 0
+stdout: (empty)
+stderr: (empty)
+$ llc-20 -O2 -filetype=obj -relocation-model=static commonmark/src/escape/checks/build/check_escape.O2.ll -o commonmark/src/escape/checks/build/check_escape.O2.o
+exit: 0
+stdout: (empty)
+stderr: (empty)
+$ ld.lld-20 -static -o commonmark/src/escape/checks/build/check_escape.O2 commonmark/src/escape/checks/build/check_escape.O2.o pin/npkrt.o
+exit: 0
+stdout: (empty)
+stderr: (empty)
+$ commonmark/src/escape/checks/build/check_escape.O2
+exit: 0
+stdout: PASS: escape_html_into
+PASS: escape_href_into
+PASS: unescape_entities_into
+PASS: unescape_backslashes_into
+PASS: clean_url & clean_title
+ALL cm_escape CHECKS PASSED
+stderr: (empty)
+-O2: PASS
+
+Escape writer checks: PASS

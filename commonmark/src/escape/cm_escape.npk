@@ -1,0 +1,443 @@
+// cm_escape — HTML escaping, href percent-escaping, entity/backslash unescaping,
+// and URL/title cleaning.
+// Part 3 of the Nitpick port of cmark 0.31.2 (CommonMark -> HTML).
+// Written by Neon (Google).
+//
+// Ported from cmark 0.31.2 (src/houdini_html_e.c, src/houdini_href_e.c,
+// src/houdini_html_u.c, src/entities.inc, src/buffer.c cmark_strbuf_unescape,
+// and src/inlines.c cmark_clean_url / cmark_clean_title), under the
+// BSD-2-Clause notices in ../../LICENSES/COPYING.
+
+mod:cm_escape;
+
+use "../buffer/cm_buffer.npk".{
+    Buffer, Chunk, buffer_create, buffer_put, buffer_puts, buffer_putc, buffer_detach,
+    chunk_all
+};
+use "../utf8/cm_utf8.npk".{utf8_encode};
+use "./cm_escape_entities.npk".{
+    ENTITY_COUNT, ENTITY_MIN_LEN, ENTITY_MAX_LEN,
+    ENTITY_NAMES, ENTITY_NAME_OFF, ENTITY_CP1, ENTITY_CP2
+};
+
+// cmark 0.31.2 houdini_href_e.c HREF_SAFE table (ASCII 0x00..0x7F; >= 0x80 are all 0).
+// Safe (1): ! # $ % ( ) * + , - . / 0-9 : ; = ? @ A-Z _ a-z ~
+// Special (0, handled explicitly): & -> &amp;, ' -> &#x27;
+// Unsafe (0, percent-encoded as %XX): controls, space, ", <, >, [, \, ], ^, `, {, |, }, DEL, >= 0x80
+fixed uint8[128]:HREF_SAFE = [
+    0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8,
+    0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8,
+    0u8, 1u8, 0u8, 1u8, 1u8, 1u8, 0u8, 0u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8,
+    1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 0u8, 1u8, 0u8, 1u8,
+    1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8,
+    1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 0u8, 0u8, 0u8, 0u8, 1u8,
+    0u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8,
+    1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 1u8, 0u8, 0u8, 0u8, 1u8, 0u8
+];
+
+// Uppercase hexadecimal ASCII digits "0123456789ABCDEF".
+fixed uint8[16]:HEX_UPPER = [
+    48u8, 49u8, 50u8, 51u8, 52u8, 53u8, 54u8, 55u8,
+    56u8, 57u8, 65u8, 66u8, 67u8, 68u8, 69u8, 70u8
+];
+
+func:is_ascii_punct = bool(uint8:b) never fails {
+    pass ((b >= 33u8 && b <= 47u8)
+       || (b >= 58u8 && b <= 64u8)
+       || (b >= 91u8 && b <= 96u8)
+       || (b >= 123u8 && b <= 126u8));
+};
+
+func:is_ascii_alnum = bool(uint8:b) never fails {
+    pass ((b >= 48u8 && b <= 57u8)
+       || (b >= 65u8 && b <= 90u8)
+       || (b >= 97u8 && b <= 122u8));
+};
+
+// cmark_isspace: ASCII whitespace (' ', '\t', '\n', '\v', '\f', '\r').
+func:is_ascii_space = bool(uint8:b) never fails {
+    pass (b == 32u8 || (b >= 9u8 && b <= 13u8));
+};
+
+// Return 0..15 for an ASCII hex digit, or -1 otherwise.
+func:hex_val = int64(uint8:b) never fails {
+    if (b >= 48u8 && b <= 57u8) {
+        pass ((b => int64) - 48i64);
+    }
+    if (b >= 65u8 && b <= 70u8) {
+        pass ((b => int64) - 55i64);
+    }
+    if (b >= 97u8 && b <= 102u8) {
+        pass ((b => int64) - 87i64);
+    }
+    pass (0i64 - 1i64);
+};
+
+// Compare base[off .. off + len) against ENTITY_NAMES entry `idx`.
+// Returns -1 if target < entry, 0 if equal, 1 if target > entry.
+func:entity_cmp = int64(string:base, int64:off, int64:len, int64:idx) never fails {
+    fixed uint8[]:bs = string_bytes(base);
+    fixed uint8[]:ns = string_bytes(ENTITY_NAMES);
+    int64:noff = ENTITY_NAME_OFF[idx] => int64;
+    int64:nlen = (ENTITY_NAME_OFF[idx + 1i64] => int64) - noff;
+    int64:mlen = len;
+    if (nlen < mlen) {
+        mlen = nlen;
+    }
+    int64:k = 0i64;
+    while (k < mlen) decreases mlen - k {
+        uint8:a = bs[off + k];
+        uint8:b = ns[noff + k];
+        if (a < b) { pass (0i64 - 1i64); }
+        if (a > b) { pass 1i64; }
+        k = k + 1i64;
+    }
+    if (len < nlen) { pass (0i64 - 1i64); }
+    if (len > nlen) { pass 1i64; }
+    pass 0i64;
+};
+
+// Binary search for entity name base[off .. off + len) in ENTITY_NAMES.
+// Returns matching index in [0, ENTITY_COUNT) or -1 if not found.
+func:entity_find = int64(string:base, int64:off, int64:len) never fails {
+    int64:lo = 0i64;
+    int64:hi = ENTITY_COUNT;
+    while (lo < hi) decreases hi - lo {
+        int64:mid = lo + ((hi - lo) / 2i64);
+        int64:cmp = raw entity_cmp(base, off, len, mid);
+        if (cmp < 0i64) {
+            hi = mid;
+        } else if (cmp > 0i64) {
+            lo = mid + 1i64;
+        } else {
+            pass mid;
+        }
+    }
+    pass (0i64 - 1i64);
+};
+
+// Try to unescape a single entity or numeric character reference starting at `start`
+// (the byte immediately after '&') within [start, hi).
+// Returns bytes consumed (including trailing ';') if valid, or 0 otherwise.
+func:unescape_ent = int64(Buffer->:buf, string:base, int64:start, int64:hi) {
+    int64:rem = hi - start;
+    if (rem < 3i64) {
+        pass 0i64;
+    }
+    fixed uint8[]:bs = string_bytes(base);
+
+    // Numeric character reference: &#...; or &#x...; / &#X...;
+    if (bs[start] == 35u8) {
+        uint8:b1 = bs[start + 1i64];
+        if (b1 == 120u8 || b1 == 88u8) {
+            // Hexadecimal: 1..6 hex digits followed by ';'
+            int64:cp = 0i64;
+            int64:j = 2i64;
+            while (j < rem && j < 8i64) decreases rem - j {
+                int64:hv = raw hex_val(bs[start + j]);
+                if (hv < 0i64) { break; }
+                cp = (cp << 4i64) + hv;
+                j = j + 1i64;
+            }
+            if (j > 2i64 && j < rem && bs[start + j] == 59u8) {
+                if (cp == 0i64 || (cp >= 55296i64 && cp <= 57343i64) || cp > 1114111i64) {
+                    cp = 65533i64;
+                }
+                discard(relay utf8_encode(cp, buf));
+                pass (j + 1i64);
+            }
+            pass 0i64;
+        } else {
+            // Decimal: 1..7 decimal digits followed by ';'
+            int64:cp = 0i64;
+            int64:j = 1i64;
+            while (j < rem && j < 8i64) decreases rem - j {
+                uint8:d = bs[start + j];
+                if (d < 48u8 || d > 57u8) { break; }
+                cp = (cp * 10i64) + ((d => int64) - 48i64);
+                j = j + 1i64;
+            }
+            if (j > 1i64 && j < rem && bs[start + j] == 59u8) {
+                if (cp == 0i64 || (cp >= 55296i64 && cp <= 57343i64) || cp > 1114111i64) {
+                    cp = 65533i64;
+                }
+                discard(relay utf8_encode(cp, buf));
+                pass (j + 1i64);
+            }
+            pass 0i64;
+        }
+    }
+
+    // Named HTML5 entity: 2..31 ASCII alphanumeric bytes followed by ';'
+    int64:j = 0i64;
+    while (j < rem && j <= ENTITY_MAX_LEN) decreases rem - j {
+        if (!(raw is_ascii_alnum(bs[start + j]))) { break; }
+        j = j + 1i64;
+    }
+    if (j >= ENTITY_MIN_LEN && j <= ENTITY_MAX_LEN && j < rem && bs[start + j] == 59u8) {
+        int64:idx = raw entity_find(base, start, j);
+        if (idx >= 0i64) {
+            int64:cp1 = ENTITY_CP1[idx] => int64;
+            int64:cp2 = ENTITY_CP2[idx] => int64;
+            discard(relay utf8_encode(cp1, buf));
+            if (cp2 != 0i64) {
+                discard(relay utf8_encode(cp2, buf));
+            }
+            pass (j + 1i64);
+        }
+    }
+
+    pass 0i64;
+};
+
+// Append chunk `c` of `base` with & < > " escaped; when `secure` is true, also
+// escape '/' as "&#47;" per cmark 0.31.2's houdini_escape_html0.
+pub func:escape_html_into = NIL(Buffer->:buf, string:base, Chunk:c, bool:secure) {
+    if (c.off < 0i64 || c.len <= 0i64 || c.off >= base.len) {
+        pass NIL;
+    }
+    int64:len = c.len;
+    int64:avail = base.len - c.off;
+    if (avail < len) {
+        len = avail;
+    }
+    int64:hi = c.off + len;
+    fixed uint8[]:bs = string_bytes(base);
+
+    int64:i = c.off;
+    int64:run_start = c.off;
+    while (i < hi) decreases hi - i {
+        uint8:b = bs[i];
+        bool:is_esc = (b == 34u8 || b == 38u8 || b == 60u8 || b == 62u8
+                    || (secure && b == 47u8));
+        if (is_esc) {
+            if (i > run_start) {
+                Chunk:run = Chunk{ off: run_start, len: i - run_start };
+                discard(relay buffer_put(buf, base, run));
+            }
+            if (b == 34u8) {
+                discard(relay buffer_puts(buf, "&quot;"));
+            } else if (b == 38u8) {
+                discard(relay buffer_puts(buf, "&amp;"));
+            } else if (b == 60u8) {
+                discard(relay buffer_puts(buf, "&lt;"));
+            } else if (b == 62u8) {
+                discard(relay buffer_puts(buf, "&gt;"));
+            } else {
+                discard(relay buffer_puts(buf, "&#47;"));
+            }
+            run_start = i + 1i64;
+        }
+        i = i + 1i64;
+    }
+    if (hi > run_start) {
+        Chunk:tail = Chunk{ off: run_start, len: hi - run_start };
+        discard(relay buffer_put(buf, base, tail));
+    }
+    pass NIL;
+};
+
+// Append chunk `c` of `base` percent-escaped as an href, matching cmark 0.31.2's
+// houdini_escape_href.
+pub func:escape_href_into = NIL(Buffer->:buf, string:base, Chunk:c) {
+    if (c.off < 0i64 || c.len <= 0i64 || c.off >= base.len) {
+        pass NIL;
+    }
+    int64:len = c.len;
+    int64:avail = base.len - c.off;
+    if (avail < len) {
+        len = avail;
+    }
+    int64:hi = c.off + len;
+    fixed uint8[]:bs = string_bytes(base);
+
+    int64:i = c.off;
+    int64:run_start = c.off;
+    while (i < hi) decreases hi - i {
+        uint8:b = bs[i];
+        bool:safe = false;
+        if (b < 128u8) {
+            safe = (HREF_SAFE[b => int64] != 0u8);
+        }
+        if (!safe) {
+            if (i > run_start) {
+                Chunk:run = Chunk{ off: run_start, len: i - run_start };
+                discard(relay buffer_put(buf, base, run));
+            }
+            if (b == 38u8) {
+                discard(relay buffer_puts(buf, "&amp;"));
+            } else if (b == 39u8) {
+                discard(relay buffer_puts(buf, "&#x27;"));
+            } else {
+                int64:bv = b => int64;
+                int64:hi_hex = HEX_UPPER[(bv >> 4i64) & 15i64] => int64;
+                int64:lo_hex = HEX_UPPER[bv & 15i64] => int64;
+                discard(relay buffer_putc(buf, 37i64));
+                discard(relay buffer_putc(buf, hi_hex));
+                discard(relay buffer_putc(buf, lo_hex));
+            }
+            run_start = i + 1i64;
+        }
+        i = i + 1i64;
+    }
+    if (hi > run_start) {
+        Chunk:tail = Chunk{ off: run_start, len: hi - run_start };
+        discard(relay buffer_put(buf, base, tail));
+    }
+    pass NIL;
+};
+
+// Append chunk `c` of `base` with HTML5 named entities and decimal/hexadecimal
+// numeric character references replaced by their UTF-8 characters
+// (cmark 0.31.2 houdini_unescape_html_f).
+pub func:unescape_entities_into = NIL(Buffer->:buf, string:base, Chunk:c) {
+    if (c.off < 0i64 || c.len <= 0i64 || c.off >= base.len) {
+        pass NIL;
+    }
+    int64:len = c.len;
+    int64:avail = base.len - c.off;
+    if (avail < len) {
+        len = avail;
+    }
+    int64:hi = c.off + len;
+    fixed uint8[]:bs = string_bytes(base);
+
+    int64:i = c.off;
+    int64:run_start = c.off;
+    while (i < hi) decreases hi - i {
+        if (bs[i] == 38u8) {
+            if (i > run_start) {
+                Chunk:run = Chunk{ off: run_start, len: i - run_start };
+                discard(relay buffer_put(buf, base, run));
+            }
+            int64:consumed = relay unescape_ent(buf, base, i + 1i64, hi);
+            if (consumed > 0i64) {
+                i = i + 1i64 + consumed;
+                run_start = i;
+            } else {
+                discard(relay buffer_putc(buf, 38i64));
+                i = i + 1i64;
+                run_start = i;
+            }
+        } else {
+            i = i + 1i64;
+        }
+    }
+    if (hi > run_start) {
+        Chunk:tail = Chunk{ off: run_start, len: hi - run_start };
+        discard(relay buffer_put(buf, base, tail));
+    }
+    pass NIL;
+};
+
+// Append chunk `c` of `base` with CommonMark backslash escapes resolved
+// (cmark 0.31.2 cmark_strbuf_unescape): a backslash before an ASCII punctuation
+// character is dropped; any other backslash is kept.
+pub func:unescape_backslashes_into = NIL(Buffer->:buf, string:base, Chunk:c) {
+    if (c.off < 0i64 || c.len <= 0i64 || c.off >= base.len) {
+        pass NIL;
+    }
+    int64:len = c.len;
+    int64:avail = base.len - c.off;
+    if (avail < len) {
+        len = avail;
+    }
+    int64:hi = c.off + len;
+    fixed uint8[]:bs = string_bytes(base);
+
+    int64:i = c.off;
+    int64:run_start = c.off;
+    while (i < hi) decreases hi - i {
+        if (bs[i] == 92u8 && (i + 1i64) < hi && (raw is_ascii_punct(bs[i + 1i64]))) {
+            if (i > run_start) {
+                Chunk:run = Chunk{ off: run_start, len: i - run_start };
+                discard(relay buffer_put(buf, base, run));
+            }
+            run_start = i + 1i64;
+            i = i + 2i64;
+        } else {
+            i = i + 1i64;
+        }
+    }
+    if (hi > run_start) {
+        Chunk:tail = Chunk{ off: run_start, len: hi - run_start };
+        discard(relay buffer_put(buf, base, tail));
+    }
+    pass NIL;
+};
+
+// Clean a link URL, matching cmark 0.31.2's cmark_clean_url:
+// trim surrounding ASCII whitespace, entity-unescape, then backslash-unescape.
+pub func:clean_url = string(string:base, Chunk:c) {
+    if (c.off < 0i64 || c.len <= 0i64 || c.off >= base.len) {
+        pass "";
+    }
+    int64:len = c.len;
+    int64:avail = base.len - c.off;
+    if (avail < len) {
+        len = avail;
+    }
+    fixed uint8[]:bs = string_bytes(base);
+    int64:lo = c.off;
+    int64:hi = c.off + len;
+    while (lo < hi) decreases hi - lo {
+        if (!(raw is_ascii_space(bs[lo]))) { break; }
+        lo = lo + 1i64;
+    }
+    while (hi > lo) decreases hi - lo {
+        if (!(raw is_ascii_space(bs[hi - 1i64]))) { break; }
+        hi = hi - 1i64;
+    }
+    if (lo >= hi) {
+        pass "";
+    }
+
+    Buffer:ent_buf = relay buffer_create();
+    Chunk:trimmed = Chunk{ off: lo, len: hi - lo };
+    discard(relay unescape_entities_into(@ent_buf, base, trimmed));
+    string:ent_str = raw buffer_detach(move(ent_buf));
+
+    Buffer:out_buf = relay buffer_create();
+    discard(relay unescape_backslashes_into(@out_buf, ent_str, raw chunk_all(ent_str)));
+    pass (raw buffer_detach(move(out_buf)));
+};
+
+// Clean a link title, matching cmark 0.31.2's cmark_clean_title:
+// strip matching surrounding delimiters ('...', "...", (...)) if present,
+// entity-unescape, then backslash-unescape (without trimming inner whitespace).
+pub func:clean_title = string(string:base, Chunk:c) {
+    if (c.off < 0i64 || c.len <= 0i64 || c.off >= base.len) {
+        pass "";
+    }
+    int64:len = c.len;
+    int64:avail = base.len - c.off;
+    if (avail < len) {
+        len = avail;
+    }
+    fixed uint8[]:bs = string_bytes(base);
+    int64:lo = c.off;
+    int64:hi = c.off + len;
+
+    if ((hi - lo) >= 2i64) {
+        uint8:first = bs[lo];
+        uint8:last = bs[hi - 1i64];
+        if ((first == 39u8 && last == 39u8)
+         || (first == 40u8 && last == 41u8)
+         || (first == 34u8 && last == 34u8)) {
+            lo = lo + 1i64;
+            hi = hi - 1i64;
+        }
+    }
+    if (lo >= hi) {
+        pass "";
+    }
+
+    Buffer:ent_buf = relay buffer_create();
+    Chunk:inner = Chunk{ off: lo, len: hi - lo };
+    discard(relay unescape_entities_into(@ent_buf, base, inner));
+    string:ent_str = raw buffer_detach(move(ent_buf));
+
+    Buffer:out_buf = relay buffer_create();
+    discard(relay unescape_backslashes_into(@out_buf, ent_str, raw chunk_all(ent_str)));
+    pass (raw buffer_detach(move(out_buf)));
+};
