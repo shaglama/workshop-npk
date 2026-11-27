@@ -1,0 +1,376 @@
+// cm_utf8 — UTF-8 decoding, encoding, validation/repair, character classes, and case folding.
+// Part 2 of the Nitpick port of cmark 0.31.2 (CommonMark -> HTML).
+// Written by Neon (Google).
+//
+// Ported from cmark 0.31.2 (src/utf8.c, src/utf8.h, src/case_fold.inc),
+// derived from utf8proc (see commonmark/LICENSES/COPYING).
+
+mod:cm_utf8;
+
+use "../buffer/cm_buffer.npk".{Buffer, Chunk, buffer_put, buffer_putc};
+use "./cm_utf8_tables.npk".{
+    PUNCT_RANGE_COUNT, PUNCT_LO, PUNCT_HI,
+    CASE_FOLD_COUNT, CASE_FOLD_MULTI_TAG, CASE_FOLD_SRC, CASE_FOLD_DST, CASE_FOLD_MULTI
+};
+
+pub struct:Utf8Char = {
+    int64:cp;
+    int64:width;
+};
+
+// Decode the UTF-8 character at byte offset `pos` inside chunk `c` of `base`.
+// An invalid byte sequence yields { 0xFFFD, 1 }.
+// A position at or past the end of the chunk (or negative) yields { 0, 0 }.
+pub func:utf8_iterate = Utf8Char(string:base, Chunk:c, int64:pos) never fails {
+    if (c.off < 0i64 || c.len <= 0i64 || pos < 0i64 || pos >= c.len) {
+        pass Utf8Char{ cp: 0i64, width: 0i64 };
+    }
+    if (c.off >= base.len) {
+        pass Utf8Char{ cp: 0i64, width: 0i64 };
+    }
+    int64:idx = c.off + pos;
+    if (idx >= base.len) {
+        pass Utf8Char{ cp: 0i64, width: 0i64 };
+    }
+    int64:rem = c.len - pos;
+    int64:base_rem = base.len - idx;
+    if (base_rem < rem) {
+        rem = base_rem;
+    }
+
+    fixed uint8[]:bs = string_bytes(base);
+    int64:b0 = bs[idx] => int64;
+
+    // 1-byte ASCII: 0x00..0x7F
+    if (b0 < 128i64) {
+        pass Utf8Char{ cp: b0, width: 1i64 };
+    }
+
+    // 2-byte sequence: 0xC2..0xDF, 0x80..0xBF
+    if (b0 >= 194i64 && b0 <= 223i64) {
+        if (rem >= 2i64) {
+            int64:b1 = bs[idx + 1i64] => int64;
+            if (b1 >= 128i64 && b1 <= 191i64) {
+                int64:cp = ((b0 & 31i64) << 6i64) | (b1 & 63i64);
+                pass Utf8Char{ cp: cp, width: 2i64 };
+            }
+        }
+        pass Utf8Char{ cp: 65533i64, width: 1i64 };
+    }
+
+    // 3-byte sequence: 0xE0..0xEF (rejecting overlongs and UTF-16 surrogates)
+    if (b0 >= 224i64 && b0 <= 239i64) {
+        if (rem >= 3i64) {
+            int64:b1 = bs[idx + 1i64] => int64;
+            int64:b2 = bs[idx + 2i64] => int64;
+            bool:b1_ok = false;
+            if (b0 == 224i64) {
+                b1_ok = (b1 >= 160i64 && b1 <= 191i64);
+            } else if (b0 == 237i64) {
+                b1_ok = (b1 >= 128i64 && b1 <= 159i64);
+            } else {
+                b1_ok = (b1 >= 128i64 && b1 <= 191i64);
+            }
+            if (b1_ok && b2 >= 128i64 && b2 <= 191i64) {
+                int64:cp = ((b0 & 15i64) << 12i64) | ((b1 & 63i64) << 6i64) | (b2 & 63i64);
+                pass Utf8Char{ cp: cp, width: 3i64 };
+            }
+        }
+        pass Utf8Char{ cp: 65533i64, width: 1i64 };
+    }
+
+    // 4-byte sequence: 0xF0..0xF4 (rejecting overlongs and > U+10FFFF)
+    if (b0 >= 240i64 && b0 <= 244i64) {
+        if (rem >= 4i64) {
+            int64:b1 = bs[idx + 1i64] => int64;
+            int64:b2 = bs[idx + 2i64] => int64;
+            int64:b3 = bs[idx + 3i64] => int64;
+            bool:b1_ok = false;
+            if (b0 == 240i64) {
+                b1_ok = (b1 >= 144i64 && b1 <= 191i64);
+            } else if (b0 == 244i64) {
+                b1_ok = (b1 >= 128i64 && b1 <= 143i64);
+            } else {
+                b1_ok = (b1 >= 128i64 && b1 <= 191i64);
+            }
+            if (b1_ok && b2 >= 128i64 && b2 <= 191i64 && b3 >= 128i64 && b3 <= 191i64) {
+                int64:cp = ((b0 & 7i64) << 18i64) | ((b1 & 63i64) << 12i64) | ((b2 & 63i64) << 6i64) | (b3 & 63i64);
+                pass Utf8Char{ cp: cp, width: 4i64 };
+            }
+        }
+        pass Utf8Char{ cp: 65533i64, width: 1i64 };
+    }
+
+    pass Utf8Char{ cp: 65533i64, width: 1i64 };
+};
+
+// Append Unicode scalar value `cp` encoded as UTF-8 into `buf`.
+// Invalid scalar values (< 0, UTF-16 surrogates, or > U+10FFFF) encode as U+FFFD.
+pub func:utf8_encode = NIL(int64:cp, Buffer->:buf) {
+    int64:v = cp;
+    if (v < 0i64 || (v >= 55296i64 && v <= 57343i64) || v > 1114111i64) {
+        v = 65533i64;
+    }
+
+    if (v < 128i64) {
+        discard(relay buffer_putc(buf, v));
+    } else if (v < 2048i64) {
+        discard(relay buffer_putc(buf, 192i64 | (v >> 6i64)));
+        discard(relay buffer_putc(buf, 128i64 | (v & 63i64)));
+    } else if (v < 65536i64) {
+        discard(relay buffer_putc(buf, 224i64 | (v >> 12i64)));
+        discard(relay buffer_putc(buf, 128i64 | ((v >> 6i64) & 63i64)));
+        discard(relay buffer_putc(buf, 128i64 | (v & 63i64)));
+    } else {
+        discard(relay buffer_putc(buf, 240i64 | (v >> 18i64)));
+        discard(relay buffer_putc(buf, 128i64 | ((v >> 12i64) & 63i64)));
+        discard(relay buffer_putc(buf, 128i64 | ((v >> 6i64) & 63i64)));
+        discard(relay buffer_putc(buf, 128i64 | (v & 63i64)));
+    }
+    pass NIL;
+};
+
+// Validate one UTF-8 sequence starting at `base[idx]` with `rem >= 1` bytes available.
+// Matches cmark's `valid_utf8`:
+//   - Returns 1..4 if a valid non-NUL UTF-8 sequence starts at `idx`.
+//   - Returns -1, -2, or -3 (negative maximal subpart length) for NUL (0x00)
+//     or any ill-formed UTF-8 byte sequence.
+func:valid_utf8_len = int64(string:base, int64:idx, int64:rem) never fails {
+    fixed uint8[]:bs = string_bytes(base);
+    int64:b0 = bs[idx] => int64;
+
+    // ASCII NUL (0x00) is rejected for security reasons (CommonMark spec / cmark).
+    if (b0 == 0i64) {
+        pass (0i64 - 1i64);
+    }
+    if (b0 < 128i64) {
+        pass 1i64;
+    }
+
+    // 2-byte sequence: 0xC2..0xDF
+    if (b0 >= 194i64 && b0 <= 223i64) {
+        if (rem < 2i64) {
+            pass (0i64 - 1i64);
+        }
+        int64:b1 = bs[idx + 1i64] => int64;
+        if (b1 >= 128i64 && b1 <= 191i64) {
+            pass 2i64;
+        }
+        pass (0i64 - 1i64);
+    }
+
+    // 3-byte sequence: 0xE0..0xEF
+    if (b0 >= 224i64 && b0 <= 239i64) {
+        if (rem < 2i64) {
+            pass (0i64 - 1i64);
+        }
+        int64:b1 = bs[idx + 1i64] => int64;
+        bool:b1_ok = false;
+        if (b0 == 224i64) {
+            b1_ok = (b1 >= 160i64 && b1 <= 191i64);
+        } else if (b0 == 237i64) {
+            b1_ok = (b1 >= 128i64 && b1 <= 159i64);
+        } else {
+            b1_ok = (b1 >= 128i64 && b1 <= 191i64);
+        }
+        if (!b1_ok) {
+            pass (0i64 - 1i64);
+        }
+        if (rem < 3i64) {
+            pass (0i64 - 2i64);
+        }
+        int64:b2 = bs[idx + 2i64] => int64;
+        if (b2 >= 128i64 && b2 <= 191i64) {
+            pass 3i64;
+        }
+        pass (0i64 - 2i64);
+    }
+
+    // 4-byte sequence: 0xF0..0xF4
+    if (b0 >= 240i64 && b0 <= 244i64) {
+        if (rem < 2i64) {
+            pass (0i64 - 1i64);
+        }
+        int64:b1 = bs[idx + 1i64] => int64;
+        bool:b1_ok = false;
+        if (b0 == 240i64) {
+            b1_ok = (b1 >= 144i64 && b1 <= 191i64);
+        } else if (b0 == 244i64) {
+            b1_ok = (b1 >= 128i64 && b1 <= 143i64);
+        } else {
+            b1_ok = (b1 >= 128i64 && b1 <= 191i64);
+        }
+        if (!b1_ok) {
+            pass (0i64 - 1i64);
+        }
+        if (rem < 3i64) {
+            pass (0i64 - 2i64);
+        }
+        int64:b2 = bs[idx + 2i64] => int64;
+        if (b2 < 128i64 || b2 > 191i64) {
+            pass (0i64 - 2i64);
+        }
+        if (rem < 4i64) {
+            pass (0i64 - 3i64);
+        }
+        int64:b3 = bs[idx + 3i64] => int64;
+        if (b3 >= 128i64 && b3 <= 191i64) {
+            pass 4i64;
+        }
+        pass (0i64 - 3i64);
+    }
+
+    pass (0i64 - 1i64);
+};
+
+// Append chunk `c` of `base` into `buf`, replacing NUL (0x00) and every ill-formed
+// UTF-8 sequence (per Unicode maximal-subpart rule, matching cmark_utf8proc_check)
+// with U+FFFD (\xEF\xBF\xBD).
+pub func:utf8_check = NIL(string:base, Chunk:c, Buffer->:buf) {
+    if (c.off < 0i64 || c.len <= 0i64 || c.off >= base.len) {
+        pass NIL;
+    }
+    int64:len = c.len;
+    int64:avail = base.len - c.off;
+    if (avail < len) {
+        len = avail;
+    }
+
+    int64:pos = 0i64;
+    int64:run_start = 0i64;
+    while (pos < len) decreases len - pos {
+        int64:step = raw valid_utf8_len(base, c.off + pos, len - pos);
+        if (step > 0i64) {
+            pos = pos + step;
+        } else {
+            if (pos > run_start) {
+                Chunk:valid_run = Chunk{ off: c.off + run_start, len: pos - run_start };
+                discard(relay buffer_put(buf, base, valid_run));
+            }
+            discard(relay buffer_putc(buf, 239i64));
+            discard(relay buffer_putc(buf, 191i64));
+            discard(relay buffer_putc(buf, 189i64));
+            pos = pos + (0i64 - step);
+            run_start = pos;
+        }
+    }
+    if (pos > run_start) {
+        Chunk:tail_run = Chunk{ off: c.off + run_start, len: pos - run_start };
+        discard(relay buffer_put(buf, base, tail_run));
+    }
+    pass NIL;
+};
+
+// Unicode whitespace per CommonMark / cmark_utf8proc_is_space:
+// Unicode Zs general category plus HT (0x09), LF (0x0A), FF (0x0C), CR (0x0D).
+pub func:utf8_is_space = bool(int64:cp) never fails {
+    if (cp == 32i64 || cp == 9i64 || cp == 10i64 || cp == 12i64 || cp == 13i64) {
+        pass true;
+    }
+    if (cp == 160i64 || cp == 5760i64 || cp == 8239i64 || cp == 8287i64 || cp == 12288i64) {
+        pass true;
+    }
+    if (cp >= 8192i64 && cp <= 8202i64) {
+        pass true;
+    }
+    pass false;
+};
+
+// Unicode punctuation or symbol per CommonMark 0.31.2 / cmark_utf8proc_is_punctuation_or_symbol:
+// Unicode general categories P (Pc, Pd, Ps, Pe, Pi, Pf, Po) and S (Sm, Sc, Sk, So).
+pub func:utf8_is_punct = bool(int64:cp) never fails {
+    if (cp < 0i64 || cp > 1114111i64) {
+        pass false;
+    }
+    if (cp < 128i64) {
+        pass ((cp >= 33i64 && cp <= 47i64)
+           || (cp >= 58i64 && cp <= 64i64)
+           || (cp >= 91i64 && cp <= 96i64)
+           || (cp >= 123i64 && cp <= 126i64));
+    }
+    int64:lo = 0i64;
+    int64:hi = PUNCT_RANGE_COUNT;
+    while (lo < hi) decreases hi - lo {
+        int64:mid = lo + ((hi - lo) / 2i64);
+        int64:rlo = PUNCT_LO[mid] => int64;
+        int64:rhi = PUNCT_HI[mid] => int64;
+        if (cp < rlo) {
+            hi = mid;
+        } else if (cp > rhi) {
+            lo = mid + 1i64;
+        } else {
+            pass true;
+        }
+    }
+    pass false;
+};
+
+// Binary search for a non-ASCII code point in CASE_FOLD_SRC. Returns index or -1.
+func:case_fold_find = int64(int64:cp) never fails {
+    int64:lo = 0i64;
+    int64:hi = CASE_FOLD_COUNT;
+    while (lo < hi) decreases hi - lo {
+        int64:mid = lo + ((hi - lo) / 2i64);
+        int64:key = CASE_FOLD_SRC[mid] => int64;
+        if (cp < key) {
+            hi = mid;
+        } else if (cp > key) {
+            lo = mid + 1i64;
+        } else {
+            pass mid;
+        }
+    }
+    pass (0i64 - 1i64);
+};
+
+// Append the Unicode full case-folded form of chunk `c` of `base` into `buf`
+// (matching cmark_utf8proc_case_fold).
+pub func:utf8_case_fold = NIL(string:base, Chunk:c, Buffer->:buf) {
+    if (c.off < 0i64 || c.len <= 0i64 || c.off >= base.len) {
+        pass NIL;
+    }
+    int64:len = c.len;
+    int64:avail = base.len - c.off;
+    if (avail < len) {
+        len = avail;
+    }
+
+    int64:pos = 0i64;
+    while (pos < len) decreases len - pos {
+        Utf8Char:ch = raw utf8_iterate(base, c, pos);
+        if (ch.width <= 0i64) {
+            break;
+        }
+        int64:cp = ch.cp;
+        if (cp < 128i64) {
+            if (cp >= 65i64 && cp <= 90i64) {
+                cp = cp + 32i64;
+            }
+            discard(relay buffer_putc(buf, cp));
+        } else {
+            int64:idx = raw case_fold_find(cp);
+            if (idx < 0i64) {
+                discard(relay utf8_encode(cp, buf));
+            } else {
+                int64:dst = CASE_FOLD_DST[idx] => int64;
+                if (dst < CASE_FOLD_MULTI_TAG) {
+                    discard(relay utf8_encode(dst, buf));
+                } else {
+                    int64:mbase = (dst - CASE_FOLD_MULTI_TAG) * 3i64;
+                    int64:c0 = CASE_FOLD_MULTI[mbase] => int64;
+                    int64:c1 = CASE_FOLD_MULTI[mbase + 1i64] => int64;
+                    int64:c2 = CASE_FOLD_MULTI[mbase + 2i64] => int64;
+                    discard(relay utf8_encode(c0, buf));
+                    if (c1 != 0i64) {
+                        discard(relay utf8_encode(c1, buf));
+                    }
+                    if (c2 != 0i64) {
+                        discard(relay utf8_encode(c2, buf));
+                    }
+                }
+            }
+        }
+        pos = pos + ch.width;
+    }
+    pass NIL;
+};
