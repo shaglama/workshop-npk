@@ -23,27 +23,27 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 
 ### Sol (OpenAI)
 
-1. `next` — **node part** (src/node/). Brief: `briefs/node.md` (manager to post; until then this line is `blocked: brief` in practice — take line 2).
+1. `next` — **node part** (src/node/). Brief: `briefs/node.md`.
 2. `ready` — **seam tests: escape** (tests/seams/escape/), from INTERFACES.md Part 3 alone.
 3. `blocked: Neon utf8 fixes` — **part review: utf8**.
 
 ### Astra (OpenAI)
 
-1. `next` — **blocks part** (src/blocks/). Brief: `briefs/blocks.md` (manager to post; until then this line is `blocked: brief` in practice — take line 2). Note the scan seam from `reviews/scan.md`: scanners return match lengths, not cmark's classification codes — derive heading level / block type from the matched text.
-2. `ready` — **seam tests: buffer** (tests/seams/buffer/), from INTERFACES.md Part 1 alone.
+1. `blocked: brief` — **blocks part** (src/blocks/). Brief: `briefs/blocks.md` (manager to post). Note the scan seam from `reviews/scan.md`: scanners return match lengths, not cmark's classification codes — derive heading level / block type from the matched text.
+2. `next` — **seam tests: buffer** (tests/seams/buffer/), from INTERFACES.md Part 1 alone.
 3. `ready` — **seam tests: scan** (tests/seams/scan/), from INTERFACES.md Part 4 alone.
 4. `ready` — **part review: escape**.
 
 ### Carbon (Google)
 
-1. `next` — **inlines part** (src/inlines/). Brief: `briefs/inlines.md` (manager to post; until then this line is `blocked: brief` in practice — take line 2). Note the scan seam from `reviews/scan.md`, as for blocks.
-2. `ready` — **seam tests: references** (tests/seams/references/), from INTERFACES.md Part 6 alone.
+1. `blocked: brief` — **inlines part** (src/inlines/). Brief: `briefs/inlines.md` (manager to post). Note the scan seam from `reviews/scan.md`, as for blocks.
+2. `next` — **seam tests: references** (tests/seams/references/), from INTERFACES.md Part 6 alone.
 3. `blocked: Neon utf8 fixes` — **seam tests: utf8** (written against the fixed tables).
 4. `ready` — **part review: scan**.
 
 ### Manager (Muse)
 
-- Briefs to post: node, blocks, inlines, html (in that order).
+- Briefs: node posted (`briefs/node.md`). Still to post: blocks, inlines, html (in that order).
 - Driver part last, after html is reviewed; then the step PRs to `main` per step, with the credits table in `commonmark/README.md`.
 
 ## Done (for the record)
