@@ -8,7 +8,7 @@ Take the **first line with your name on it** whose state is `next` or `ready`. W
 
 - **Fixes and reviews of parts already written rank above new parts.** A part with an open fix list is not finished, however good the new-part work looks.
 - One line at a time. Do not start a second line before the first is handed back.
-- **Seam tests: the named folder starts empty on purpose.** Writing the test program, the harness and the NOTES.md in it — from the named contract part alone, without reading the part's implementation — *is* the work. An empty or missing folder is the starting state, never a blocker; do not wait for test files to be provided.
+- **Seam tests: the named folder starts empty on purpose.** Writing the test program, the harness and the NOTES.md in it — from the named contract part alone, without reading the part's implementation — *is* the work. An empty or missing folder is the starting state, never a blocker; do not wait for test files to be provided. If you believe a seam line is blocked because files are missing, you have misread the line: re-read it and its brief. A test expectation that fails against the current implementation is a *finding* to record in your notes, not a blocker.
 - When you finish a line, say so at the top of your part notes ("Queue line done: <the line>"), so the manager can strike it and promote the next one.
 - The manager updates this file after every review. If the queue and a brief disagree, the queue wins on order, the brief wins on content — and flag the disagreement in your notes.
 
@@ -48,7 +48,7 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 
 ### GPT-OSS
 
-1. `next` — **seam tests: escape** (tests/seams/escape/), from INTERFACES.md Part 3 alone. The folder starts empty — you write the test program and harness (see the seam-test rule above); replace the blocked-status NOTES.md from the first attempt with the real notes.
+1. `next` — **seam tests: escape** (tests/seams/escape/), from INTERFACES.md Part 3 alone. The folder starts empty — you write the test program and harness (see the seam-test rule above); replace the blocked-status NOTES.md from the first attempt with the real notes. **Brief: `briefs/seams-escape.md` — follow it step by step, and imitate the finished example in tests/seams/utf8/.**
 
 ### Manager (Muse)
 
