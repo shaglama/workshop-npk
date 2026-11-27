@@ -1,0 +1,986 @@
+// Seam tests for cm_node, by Sonnet (Anthropic). Written from INTERFACES.md
+// Part 5 alone (with Parts 1 and 6 for the buffer and the RefMap it holds), and
+// from cmark 0.31.2's documented tree and iterator behaviour. The part's source
+// and its notes were not read.
+mod:node_seam;
+
+use "../../../src/buffer/cm_buffer.npk".*;
+use "../../../src/references/cm_refs.npk".*;
+use "../../../src/node/cm_node.npk".*;
+use "../../../../pin/lib/nstr.npk".nstr_eq;
+
+// ---- helpers -------------------------------------------------------------
+
+func:mk = int64(Document->:doc, NodeKind:k) never fails {
+    pass raw node_new(doc, k);
+};
+
+func:mk_text = int64(Document->:doc, string:s) {
+    int64:n = raw node_new(doc, NodeKind.Text);
+    string:own = relay s.clone();
+    drop node_set_literal(doc, n, move(own));
+    pass n;
+};
+
+// true when n's tree links are exactly the given ones (-1 = none)
+func:links = bool(Document:doc, int64:n, int64:parent, int64:first,
+                  int64:last, int64:next, int64:prev) never fails {
+    NodeInfo:i = raw node_info(doc, n);
+    pass i.parent == parent && i.first_child == first && i.last_child == last
+         && i.next == next && i.prev == prev;
+};
+
+func:lit_is = bool(Document:doc, int64:n, string:expected) {
+    string:got = relay node_literal(doc, n);
+    pass raw nstr_eq(got, expected);
+};
+
+func:kind_letter = string(NodeKind:k) never fails {
+    if (k == NodeKind.DocumentNode) { pass "D"; }
+    if (k == NodeKind.Paragraph) { pass "P"; }
+    if (k == NodeKind.Text) { pass "t"; }
+    if (k == NodeKind.Emph) { pass "e"; }
+    if (k == NodeKind.Strong) { pass "s"; }
+    if (k == NodeKind.Softbreak) { pass "b"; }
+    if (k == NodeKind.Code) { pass "c"; }
+    if (k == NodeKind.BlockQuote) { pass "q"; }
+    if (k == NodeKind.List) { pass "l"; }
+    if (k == NodeKind.Item) { pass "i"; }
+    if (k == NodeKind.Heading) { pass "H"; }
+    pass "?";
+};
+
+// A walk of the subtree under root, as text. cmark's iterator gives a leaf node
+// (Text, Softbreak, Code ...) an Enter only, and every other node an Enter and an
+// Exit. Enter writes the kind letter and, for a Text node, its literal in [];
+// a non-leaf then writes "(" and its Exit writes ")".
+func:dump = string(Document:doc, int64:root) {
+    Buffer:b = relay buffer_create();
+    Iter:it = raw iter_new(root);
+    bool:done = false;
+    int64:guard = 0i64;
+    while (!done && guard < 100000i64) decreases 100000i64 - guard {
+        guard = guard + 1i64;
+        Step:s = raw iter_next(doc, @it);
+        if (s.event == Event.Done) {
+            done = true;
+        } else {
+            if (s.event == Event.Enter) {
+                NodeInfo:i = raw node_info(doc, s.node);
+                relay buffer_puts(@b, raw kind_letter(i.kind));
+                if (i.kind == NodeKind.Text) {
+                    string:lit = relay node_literal(doc, s.node);
+                    relay buffer_puts(@b, "[");
+                    relay buffer_puts(@b, lit);
+                    relay buffer_puts(@b, "]");
+                } else {
+                    if (i.kind != NodeKind.Softbreak && i.kind != NodeKind.Code) {
+                        relay buffer_puts(@b, "(");
+                    }
+                }
+            } else {
+                relay buffer_puts(@b, ")");
+            }
+        }
+    }
+    pass raw buffer_detach(move(b));
+};
+
+func:dump_is = bool(Document:doc, int64:root, string:expected) {
+    string:got = relay dump(doc, root);
+    pass raw nstr_eq(got, expected);
+};
+
+// Note on nesting: cmark refuses a child its parent cannot hold (a Text under a
+// BlockQuote or the Document, say). The contract is silent, so these tests only
+// build nestings cmark allows: inlines under Paragraph, Heading, Emph, Strong;
+// blocks under Document and BlockQuote.
+
+// ---- group 11: creation ----------------------------------------------------
+
+func:g_create = bool() {
+    Document:doc = relay doc_new();
+    // an empty document has no root
+    if (raw doc_root(doc) != -1i64) { pass false; }
+    if (NO_NODE != -1i64) { pass false; }
+
+    int64:p = raw mk(@doc, NodeKind.Paragraph);
+    int64:t = raw mk(@doc, NodeKind.Text);
+    int64:e = raw mk(@doc, NodeKind.Emph);
+    if (p < 0i64 || t < 0i64 || e < 0i64) { pass false; }
+    if (p == t || t == e || p == e) { pass false; }
+
+    NodeInfo:ip = raw node_info(doc, p);
+    NodeInfo:it = raw node_info(doc, t);
+    NodeInfo:ie = raw node_info(doc, e);
+    if (ip.kind != NodeKind.Paragraph) { pass false; }
+    if (it.kind != NodeKind.Text) { pass false; }
+    if (ie.kind != NodeKind.Emph) { pass false; }
+
+    // new nodes are unattached
+    if (!(raw links(doc, p, -1i64, -1i64, -1i64, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, t, -1i64, -1i64, -1i64, -1i64, -1i64))) { pass false; }
+
+    // every string is empty to start with
+    if (!(relay lit_is(doc, t, ""))) { pass false; }
+    if (!(relay lit_is(doc, p, ""))) { pass false; }
+    string:ci = relay node_code_info(doc, t);
+    string:lu = relay node_link_url(doc, t);
+    string:lt = relay node_link_title(doc, t);
+    string:oe = relay node_custom_on_enter(doc, t);
+    string:ox = relay node_custom_on_exit(doc, t);
+    if (!(raw nstr_eq(ci, "")) || !(raw nstr_eq(lu, "")) || !(raw nstr_eq(lt, ""))) { pass false; }
+    if (!(raw nstr_eq(oe, "")) || !(raw nstr_eq(ox, ""))) { pass false; }
+
+    // every kind can be created and reads back
+    NodeKind[22]:kinds = [NodeKind.None, NodeKind.DocumentNode, NodeKind.BlockQuote,
+        NodeKind.List, NodeKind.Item, NodeKind.CodeBlock, NodeKind.HtmlBlock,
+        NodeKind.CustomBlock, NodeKind.Paragraph, NodeKind.Heading,
+        NodeKind.ThematicBreak, NodeKind.Text, NodeKind.Softbreak,
+        NodeKind.Linebreak, NodeKind.Code, NodeKind.HtmlInline,
+        NodeKind.CustomInline, NodeKind.Emph, NodeKind.Strong, NodeKind.Link,
+        NodeKind.Image, NodeKind.Text];
+    Document:doc2 = relay doc_new();
+    int64:k = 0i64;
+    while (k < 22i64) decreases 22i64 - k {
+        int64:n = raw mk(@doc2, kinds[k]);
+        NodeInfo:i = raw node_info(doc2, n);
+        if (i.kind != kinds[k]) { pass false; }
+        k = k + 1i64;
+    }
+    pass true;
+};
+
+// ---- group 12: append, prepend, re-parenting -------------------------------
+
+func:g_append = bool() {
+    Document:doc = relay doc_new();
+    int64:p = raw mk(@doc, NodeKind.Paragraph);
+    int64:a = relay mk_text(@doc, "a");
+    int64:b = relay mk_text(@doc, "b");
+    int64:c = relay mk_text(@doc, "c");
+
+    drop node_append_child(@doc, p, a);
+    if (!(raw links(doc, p, -1i64, a, a, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, a, p, -1i64, -1i64, -1i64, -1i64))) { pass false; }
+    drop node_append_child(@doc, p, b);
+    drop node_append_child(@doc, p, c);
+    if (!(raw links(doc, p, -1i64, a, c, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, a, p, -1i64, -1i64, b, -1i64))) { pass false; }
+    if (!(raw links(doc, b, p, -1i64, -1i64, c, a))) { pass false; }
+    if (!(raw links(doc, c, p, -1i64, -1i64, -1i64, b))) { pass false; }
+    if (!(relay dump_is(doc, p, "P(t[a]t[b]t[c])"))) { pass false; }
+
+    // prepend
+    int64:z = relay mk_text(@doc, "z");
+    drop node_prepend_child(@doc, p, z);
+    if (!(raw links(doc, p, -1i64, z, c, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, z, p, -1i64, -1i64, a, -1i64))) { pass false; }
+    if (!(raw links(doc, a, p, -1i64, -1i64, b, z))) { pass false; }
+    // (prepend into an empty parent has its own group, 22)
+    int64:q = raw mk(@doc, NodeKind.Strong);
+    int64:y = relay mk_text(@doc, "y");
+    drop node_append_child(@doc, q, y);
+    if (!(raw links(doc, q, -1i64, y, y, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, y, q, -1i64, -1i64, -1i64, -1i64))) { pass false; }
+
+    // append of a child that already has siblings moves it: first from p to q
+    drop node_append_child(@doc, q, z);
+    if (!(raw links(doc, p, -1i64, a, c, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, a, p, -1i64, -1i64, b, -1i64))) { pass false; }
+    if (!(raw links(doc, q, -1i64, y, z, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, y, q, -1i64, -1i64, z, -1i64))) { pass false; }
+    if (!(raw links(doc, z, q, -1i64, -1i64, -1i64, y))) { pass false; }
+    // a middle child moved away closes the gap
+    drop node_append_child(@doc, q, b);
+    if (!(raw links(doc, p, -1i64, a, c, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, a, p, -1i64, -1i64, c, -1i64))) { pass false; }
+    if (!(raw links(doc, c, p, -1i64, -1i64, -1i64, a))) { pass false; }
+    // a last child moved away updates the old parent's last_child
+    drop node_append_child(@doc, q, c);
+    if (!(raw links(doc, p, -1i64, a, a, -1i64, -1i64))) { pass false; }
+    if (!(relay dump_is(doc, q, "s(t[y]t[z]t[b]t[c])"))) { pass false; }
+    if (!(relay dump_is(doc, p, "P(t[a])"))) { pass false; }
+
+    // appending a node that is already the last child leaves it last
+    drop node_append_child(@doc, q, c);
+    if (!(relay dump_is(doc, q, "s(t[y]t[z]t[b]t[c])"))) { pass false; }
+    // appending the first child of a parent puts it last
+    drop node_append_child(@doc, q, y);
+    if (!(relay dump_is(doc, q, "s(t[z]t[b]t[c]t[y])"))) { pass false; }
+    if (!(raw links(doc, q, -1i64, z, y, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, z, q, -1i64, -1i64, b, -1i64))) { pass false; }
+    // the only child of a parent moved elsewhere empties that parent
+    drop node_append_child(@doc, q, a);
+    if (!(raw links(doc, p, -1i64, -1i64, -1i64, -1i64, -1i64))) { pass false; }
+    pass relay dump_is(doc, q, "s(t[z]t[b]t[c]t[y]t[a])");
+};
+
+// ---- group 13: insert, unlink, replace -------------------------------------
+
+func:g_surgery = bool() {
+    Document:doc = relay doc_new();
+    int64:p = raw mk(@doc, NodeKind.Paragraph);
+    int64:a = relay mk_text(@doc, "a");
+    int64:c = relay mk_text(@doc, "c");
+    drop node_append_child(@doc, p, a);
+    drop node_append_child(@doc, p, c);
+
+    // insert_before a middle position
+    int64:b = relay mk_text(@doc, "b");
+    drop node_insert_before(@doc, c, b);
+    if (!(relay dump_is(doc, p, "P(t[a]t[b]t[c])"))) { pass false; }
+    if (!(raw links(doc, b, p, -1i64, -1i64, c, a))) { pass false; }
+    // insert_before the first child updates first_child
+    int64:z = relay mk_text(@doc, "z");
+    drop node_insert_before(@doc, a, z);
+    if (!(raw links(doc, p, -1i64, z, c, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, z, p, -1i64, -1i64, a, -1i64))) { pass false; }
+    if (!(raw links(doc, a, p, -1i64, -1i64, b, z))) { pass false; }
+    // insert_after the last child updates last_child
+    int64:d = relay mk_text(@doc, "d");
+    drop node_insert_after(@doc, c, d);
+    if (!(raw links(doc, p, -1i64, z, d, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, d, p, -1i64, -1i64, -1i64, c))) { pass false; }
+    if (!(raw links(doc, c, p, -1i64, -1i64, d, b))) { pass false; }
+    // insert_after a middle position
+    int64:m = relay mk_text(@doc, "m");
+    drop node_insert_after(@doc, a, m);
+    if (!(relay dump_is(doc, p, "P(t[z]t[a]t[m]t[b]t[c]t[d])"))) { pass false; }
+    if (!(raw links(doc, m, p, -1i64, -1i64, b, a))) { pass false; }
+
+    // unlink a middle node: detached, still readable, siblings joined
+    drop node_unlink(@doc, m);
+    if (!(raw links(doc, m, -1i64, -1i64, -1i64, -1i64, -1i64))) { pass false; }
+    if (!(relay lit_is(doc, m, "m"))) { pass false; }
+    if (!(raw links(doc, a, p, -1i64, -1i64, b, z))) { pass false; }
+    if (!(raw links(doc, b, p, -1i64, -1i64, c, a))) { pass false; }
+    // unlink the first
+    drop node_unlink(@doc, z);
+    if (!(raw links(doc, p, -1i64, a, d, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, a, p, -1i64, -1i64, b, -1i64))) { pass false; }
+    // unlink the last
+    drop node_unlink(@doc, d);
+    if (!(raw links(doc, p, -1i64, a, c, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, c, p, -1i64, -1i64, -1i64, b))) { pass false; }
+    if (!(relay dump_is(doc, p, "P(t[a]t[b]t[c])"))) { pass false; }
+    // a detached node can be attached again
+    drop node_append_child(@doc, p, m);
+    if (!(relay dump_is(doc, p, "P(t[a]t[b]t[c]t[m])"))) { pass false; }
+
+    // unlink an only child
+    int64:q = raw mk(@doc, NodeKind.Strong);
+    int64:o = relay mk_text(@doc, "o");
+    drop node_append_child(@doc, q, o);
+    drop node_unlink(@doc, o);
+    if (!(raw links(doc, q, -1i64, -1i64, -1i64, -1i64, -1i64))) { pass false; }
+    // an unlinked node carries its subtree with it
+    int64:e = raw mk(@doc, NodeKind.Emph);
+    int64:ei = relay mk_text(@doc, "in");
+    drop node_append_child(@doc, e, ei);
+    drop node_append_child(@doc, p, e);
+    drop node_unlink(@doc, e);
+    if (!(relay dump_is(doc, e, "e(t[in])"))) { pass false; }
+    if (!(relay dump_is(doc, p, "P(t[a]t[b]t[c]t[m])"))) { pass false; }
+
+    // replace a middle child
+    int64:r = relay mk_text(@doc, "R");
+    drop node_replace(@doc, b, r);
+    if (!(relay dump_is(doc, p, "P(t[a]t[R]t[c]t[m])"))) { pass false; }
+    if (!(raw links(doc, b, -1i64, -1i64, -1i64, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, r, p, -1i64, -1i64, c, a))) { pass false; }
+    // replace the first and the last
+    int64:r1 = relay mk_text(@doc, "F");
+    drop node_replace(@doc, a, r1);
+    int64:r2 = relay mk_text(@doc, "L");
+    drop node_replace(@doc, m, r2);
+    if (!(relay dump_is(doc, p, "P(t[F]t[R]t[c]t[L])"))) { pass false; }
+    if (!(raw links(doc, p, -1i64, r1, r2, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, a, -1i64, -1i64, -1i64, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, m, -1i64, -1i64, -1i64, -1i64, -1i64))) { pass false; }
+    // replace an only child
+    int64:ra = relay mk_text(@doc, "A");
+    int64:ro = relay mk_text(@doc, "O");
+    drop node_append_child(@doc, q, ro);
+    drop node_replace(@doc, ro, ra);
+    if (!(raw links(doc, q, -1i64, ra, ra, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, ra, q, -1i64, -1i64, -1i64, -1i64))) { pass false; }
+    // replace a node that has children: the children travel with the target
+    int64:w = raw mk(@doc, NodeKind.Strong);
+    int64:wi = relay mk_text(@doc, "wi");
+    drop node_append_child(@doc, w, wi);
+    int64:host = raw mk(@doc, NodeKind.Paragraph);
+    drop node_append_child(@doc, host, w);
+    int64:rb = relay mk_text(@doc, "B");
+    drop node_replace(@doc, w, rb);
+    if (!(relay dump_is(doc, host, "P(t[B])"))) { pass false; }
+    if (!(relay dump_is(doc, w, "s(t[wi])"))) { pass false; }
+    if (!(raw links(doc, host, -1i64, rb, rb, -1i64, -1i64))) { pass false; }
+    // a replacement that is itself a subtree comes with its children
+    int64:sub = raw mk(@doc, NodeKind.Emph);
+    int64:subi = relay mk_text(@doc, "si");
+    drop node_append_child(@doc, sub, subi);
+    drop node_replace(@doc, rb, sub);
+    pass relay dump_is(doc, host, "P(e(t[si]))");
+};
+
+// ---- group 14: strings -----------------------------------------------------
+
+func:g_strings = bool() {
+    Document:doc = relay doc_new();
+    int64:t = raw mk(@doc, NodeKind.Text);
+    int64:u = raw mk(@doc, NodeKind.Text);
+
+    string:s1 = "hello \u{e9} world";
+    string:o1 = relay s1.clone();
+    drop node_set_literal(@doc, t, move(o1));
+    if (!(relay lit_is(doc, t, "hello \u{e9} world"))) { pass false; }
+    // reading twice gives the same text (the getter clones; the node keeps its own)
+    if (!(relay lit_is(doc, t, "hello \u{e9} world"))) { pass false; }
+    // replacing
+    string:o2 = relay "second".clone();
+    drop node_set_literal(@doc, t, move(o2));
+    if (!(relay lit_is(doc, t, "second"))) { pass false; }
+    // setting empty
+    string:o3 = relay "".clone();
+    drop node_set_literal(@doc, t, move(o3));
+    if (!(relay lit_is(doc, t, ""))) { pass false; }
+    // a long literal
+    Buffer:bb = relay buffer_create();
+    int64:i = 0i64;
+    while (i < 5000i64) decreases 5000i64 - i {
+        relay buffer_putc(@bb, 97i64 + (i % 26i64));
+        i = i + 1i64;
+    }
+    string:long1 = raw buffer_detach(move(bb));
+    string:long2 = relay long1.clone();
+    drop node_set_literal(@doc, t, move(long2));
+    string:back = relay node_literal(doc, t);
+    if (back.len != 5000i64) { pass false; }
+    if (!(raw nstr_eq(back, long1))) { pass false; }
+    // an embedded NUL byte survives the round trip
+    Buffer:nb = relay buffer_create();
+    relay buffer_putc(@nb, 65i64);
+    relay buffer_putc(@nb, 0i64);
+    relay buffer_putc(@nb, 66i64);
+    string:nul1 = raw buffer_detach(move(nb));
+    string:nul2 = relay nul1.clone();
+    drop node_set_literal(@doc, u, move(nul2));
+    string:nulback = relay node_literal(doc, u);
+    if (nulback.len != 3i64) { pass false; }
+    if (!(raw nstr_eq(nulback, nul1))) { pass false; }
+    // the other node was not touched by the first node's setter
+    if (!(relay lit_is(doc, t, long1))) { pass false; }
+
+    // code info is its own string
+    int64:cb = raw mk(@doc, NodeKind.CodeBlock);
+    string:l1 = relay "body\n".clone();
+    drop node_set_literal(@doc, cb, move(l1));
+    string:ci1 = relay "rust ignore".clone();
+    drop node_set_code_info(@doc, cb, move(ci1));
+    string:gci = relay node_code_info(doc, cb);
+    if (!(raw nstr_eq(gci, "rust ignore"))) { pass false; }
+    if (!(relay lit_is(doc, cb, "body\n"))) { pass false; }
+    string:ci2 = relay "".clone();
+    drop node_set_code_info(@doc, cb, move(ci2));
+    string:gci2 = relay node_code_info(doc, cb);
+    if (!(raw nstr_eq(gci2, ""))) { pass false; }
+    if (!(relay lit_is(doc, cb, "body\n"))) { pass false; }
+
+    // link: url and title together, replaced together
+    int64:lk = raw mk(@doc, NodeKind.Link);
+    string:url1 = relay "/url?a=1&b=2".clone();
+    string:ttl1 = relay "a \"title\"".clone();
+    drop node_set_link(@doc, lk, move(url1), move(ttl1));
+    string:gu = relay node_link_url(doc, lk);
+    string:gt = relay node_link_title(doc, lk);
+    if (!(raw nstr_eq(gu, "/url?a=1&b=2"))) { pass false; }
+    if (!(raw nstr_eq(gt, "a \"title\""))) { pass false; }
+    string:url2 = relay "/other".clone();
+    string:ttl2 = relay "".clone();
+    drop node_set_link(@doc, lk, move(url2), move(ttl2));
+    string:gu2 = relay node_link_url(doc, lk);
+    string:gt2 = relay node_link_title(doc, lk);
+    if (!(raw nstr_eq(gu2, "/other"))) { pass false; }
+    if (!(raw nstr_eq(gt2, ""))) { pass false; }
+    // an image holds a link payload as well
+    int64:im = raw mk(@doc, NodeKind.Image);
+    string:url3 = relay "img.png".clone();
+    string:ttl3 = relay "pic".clone();
+    drop node_set_link(@doc, im, move(url3), move(ttl3));
+    string:gu3 = relay node_link_url(doc, im);
+    string:gt3 = relay node_link_title(doc, im);
+    if (!(raw nstr_eq(gu3, "img.png")) || !(raw nstr_eq(gt3, "pic"))) { pass false; }
+    // the first link was not disturbed by the image
+    string:gu4 = relay node_link_url(doc, lk);
+    if (!(raw nstr_eq(gu4, "/other"))) { pass false; }
+
+    // custom blocks and inlines: on_enter and on_exit
+    int64:cu = raw mk(@doc, NodeKind.CustomBlock);
+    string:en = relay "<div>".clone();
+    string:ex = relay "</div>".clone();
+    drop node_set_custom(@doc, cu, move(en), move(ex));
+    string:gen = relay node_custom_on_enter(doc, cu);
+    string:gex = relay node_custom_on_exit(doc, cu);
+    if (!(raw nstr_eq(gen, "<div>")) || !(raw nstr_eq(gex, "</div>"))) { pass false; }
+    int64:ci = raw mk(@doc, NodeKind.CustomInline);
+    string:en2 = relay "<b>".clone();
+    string:ex2 = relay "</b>".clone();
+    drop node_set_custom(@doc, ci, move(en2), move(ex2));
+    string:gen2 = relay node_custom_on_enter(doc, ci);
+    string:gex2 = relay node_custom_on_exit(doc, ci);
+    if (!(raw nstr_eq(gen2, "<b>")) || !(raw nstr_eq(gex2, "</b>"))) { pass false; }
+    string:gen3 = relay node_custom_on_enter(doc, cu);
+    if (!(raw nstr_eq(gen3, "<div>"))) { pass false; }
+
+    // strings survive store growth and tree surgery
+    int64:j = 0i64;
+    while (j < 300i64) decreases 300i64 - j {
+        int64:x = raw mk(@doc, NodeKind.Softbreak);
+        drop node_append_child(@doc, cu, x);
+        j = j + 1i64;
+    }
+    string:gen4 = relay node_custom_on_enter(doc, cu);
+    if (!(raw nstr_eq(gen4, "<div>"))) { pass false; }
+    pass relay lit_is(doc, cb, "body\n");
+};
+
+// ---- group 15: plain-data setters ------------------------------------------
+
+func:g_plain = bool() {
+    Document:doc = relay doc_new();
+    int64:l = raw mk(@doc, NodeKind.List);
+    int64:l2 = raw mk(@doc, NodeKind.List);
+    ListData:d = ListData{ start: 7i64, list_type: ListType.Ordered, delimiter: 2i64,
+        bullet: 0i64, marker_offset: 1i64, padding: 4i64, tight: true };
+    drop node_set_list(@doc, l, d);
+    NodeInfo:i = raw node_info(doc, l);
+    if (i.kind != NodeKind.List) { pass false; }
+    if (i.list.start != 7i64 || i.list.delimiter != 2i64 || i.list.bullet != 0i64) { pass false; }
+    if (i.list.marker_offset != 1i64 || i.list.padding != 4i64 || !i.list.tight) { pass false; }
+    if (i.list.list_type != ListType.Ordered) { pass false; }
+    ListData:d2 = ListData{ start: 0i64, list_type: ListType.Bullet, delimiter: 0i64,
+        bullet: 42i64, marker_offset: 3i64, padding: 2i64, tight: false };
+    drop node_set_list(@doc, l, d2);
+    NodeInfo:i2 = raw node_info(doc, l);
+    if (i2.list.list_type != ListType.Bullet || i2.list.bullet != 42i64) { pass false; }
+    if (i2.list.start != 0i64 || i2.list.marker_offset != 3i64 || i2.list.padding != 2i64) { pass false; }
+    if (i2.list.tight) { pass false; }
+    // the other list was not touched
+    NodeInfo:i3 = raw node_info(doc, l2);
+    if (i3.list.start == 7i64 && i3.list.padding == 4i64) { pass false; }
+
+    // code fence
+    int64:cb = raw mk(@doc, NodeKind.CodeBlock);
+    drop node_set_code_fence(@doc, cb, 5i64, 2i64, 126i64, true);
+    NodeInfo:c1 = raw node_info(doc, cb);
+    if (c1.fence_length != 5i64 || c1.fence_offset != 2i64) { pass false; }
+    if (c1.fence_char != 126i64 || !c1.fenced) { pass false; }
+    drop node_set_code_fence(@doc, cb, 0i64, 0i64, 0i64, false);
+    NodeInfo:c2 = raw node_info(doc, cb);
+    if (c2.fence_length != 0i64 || c2.fence_char != 0i64 || c2.fenced) { pass false; }
+    drop node_set_code_fence(@doc, cb, 3i64, 0i64, 96i64, true);
+    // code fence data does not disturb the literal or code info
+    string:s = relay "x".clone();
+    drop node_set_literal(@doc, cb, move(s));
+    string:ci = relay "go".clone();
+    drop node_set_code_info(@doc, cb, move(ci));
+    NodeInfo:c3 = raw node_info(doc, cb);
+    if (c3.fence_length != 3i64 || c3.fence_char != 96i64 || !c3.fenced) { pass false; }
+
+    // heading
+    int64:h = raw mk(@doc, NodeKind.Heading);
+    drop node_set_heading(@doc, h, HeadingData{ level: 3i64, setext: true });
+    NodeInfo:h1 = raw node_info(doc, h);
+    if (h1.heading.level != 3i64 || !h1.heading.setext) { pass false; }
+    drop node_set_heading(@doc, h, HeadingData{ level: 6i64, setext: false });
+    NodeInfo:h2 = raw node_info(doc, h);
+    if (h2.heading.level != 6i64 || h2.heading.setext) { pass false; }
+
+    // html block type
+    int64:hb = raw mk(@doc, NodeKind.HtmlBlock);
+    drop node_set_html_block_type(@doc, hb, 6i64);
+    NodeInfo:b1 = raw node_info(doc, hb);
+    if (b1.html_block_type != 6i64) { pass false; }
+    drop node_set_html_block_type(@doc, hb, 1i64);
+    NodeInfo:b2 = raw node_info(doc, hb);
+    if (b2.html_block_type != 1i64) { pass false; }
+
+    // source position: four values, each in its own place
+    int64:p = raw mk(@doc, NodeKind.Paragraph);
+    drop node_set_sourcepos(@doc, p, 3i64, 5i64, 9i64, 12i64);
+    NodeInfo:p1 = raw node_info(doc, p);
+    if (p1.start_line != 3i64 || p1.start_column != 5i64) { pass false; }
+    if (p1.end_line != 9i64 || p1.end_column != 12i64) { pass false; }
+    drop node_set_sourcepos(@doc, p, 1i64, 1i64, 1i64, 1i64);
+    NodeInfo:p2 = raw node_info(doc, p);
+    if (p2.start_line != 1i64 || p2.start_column != 1i64) { pass false; }
+    if (p2.end_line != 1i64 || p2.end_column != 1i64) { pass false; }
+
+    // working flags: the eight combinations
+    int64:m = 0i64;
+    while (m < 8i64) decreases 8i64 - m {
+        bool:o = (m % 2i64) == 1i64;
+        bool:lb = ((m / 2i64) % 2i64) == 1i64;
+        bool:lc = ((m / 4i64) % 2i64) == 1i64;
+        drop node_set_flags(@doc, p, o, lb, lc);
+        NodeInfo:f = raw node_info(doc, p);
+        if (f.open != o || f.last_line_blank != lb || f.last_line_checked != lc) { pass false; }
+        m = m + 1i64;
+    }
+    // the flags and positions setters leave the other plain data alone
+    NodeInfo:p3 = raw node_info(doc, p);
+    if (p3.kind != NodeKind.Paragraph || p3.start_line != 1i64) { pass false; }
+
+    // setters on a node inside a tree leave its links alone
+    int64:t1 = relay mk_text(@doc, "a");
+    drop node_append_child(@doc, p, t1);
+    drop node_set_sourcepos(@doc, p, 2i64, 2i64, 2i64, 2i64);
+    drop node_set_flags(@doc, p, true, true, true);
+    pass raw links(doc, p, -1i64, t1, t1, -1i64, -1i64);
+};
+
+// ---- group 16: the iterator ------------------------------------------------
+
+func:g_iterator = bool() {
+    Document:doc = relay doc_new();
+    int64:d = raw mk(@doc, NodeKind.DocumentNode);
+    int64:p1 = raw mk(@doc, NodeKind.Paragraph);
+    int64:p2 = raw mk(@doc, NodeKind.Paragraph);
+    int64:p3 = raw mk(@doc, NodeKind.Paragraph);
+    int64:e = raw mk(@doc, NodeKind.Emph);
+    int64:s = raw mk(@doc, NodeKind.Strong);
+    drop node_append_child(@doc, d, p1);
+    drop node_append_child(@doc, d, p2);
+    drop node_append_child(@doc, d, p3);
+    int64:ta = relay mk_text(@doc, "a");
+    int64:tb = relay mk_text(@doc, "b");
+    int64:tc = relay mk_text(@doc, "c");
+    int64:br = raw mk(@doc, NodeKind.Softbreak);
+    drop node_append_child(@doc, p1, ta);
+    drop node_append_child(@doc, p1, e);
+    drop node_append_child(@doc, e, tb);
+    drop node_append_child(@doc, e, s);
+    drop node_append_child(@doc, s, tc);
+    drop node_append_child(@doc, p1, br);
+    // p2 stays empty; p3 holds one leaf
+    int64:td = relay mk_text(@doc, "d");
+    drop node_append_child(@doc, p3, td);
+
+    // a whole document: document order; a non-leaf, even an empty one, enters and exits
+    if (!(relay dump_is(doc, d,
+        "D(P(t[a]e(t[b]s(t[c]))b)P()P(t[d]))"))) { pass false; }
+    // the walk is bounded by its root: a subtree, whatever lies beside it
+    if (!(relay dump_is(doc, p1, "P(t[a]e(t[b]s(t[c]))b)"))) { pass false; }
+    if (!(relay dump_is(doc, e, "e(t[b]s(t[c]))"))) { pass false; }
+    if (!(relay dump_is(doc, p2, "P()"))) { pass false; }
+    // a leaf as the root: its Enter, then Done
+    if (!(relay dump_is(doc, ta, "t[a]"))) { pass false; }
+
+    // the raw event sequence for an empty non-leaf block: Enter, Exit, Done
+    Iter:it = raw iter_new(p2);
+    Step:s1 = raw iter_next(doc, @it);
+    Step:s2 = raw iter_next(doc, @it);
+    Step:s3 = raw iter_next(doc, @it);
+    if (s1.event != Event.Enter || s1.node != p2) { pass false; }
+    if (s2.event != Event.Exit || s2.node != p2) { pass false; }
+    if (s3.event != Event.Done) { pass false; }
+    // after Done, the walk stays done (cmark's iterator does)
+    Step:s4 = raw iter_next(doc, @it);
+    if (s4.event != Event.Done) { pass false; }
+
+    // the nodes in a walk are the right ones, not just the right kinds
+    Iter:it2 = raw iter_new(d);
+    Step:w1 = raw iter_next(doc, @it2);
+    Step:w2 = raw iter_next(doc, @it2);
+    Step:w3 = raw iter_next(doc, @it2);
+    if (w1.event != Event.Enter || w1.node != d) { pass false; }
+    if (w2.event != Event.Enter || w2.node != p1) { pass false; }
+    if (w3.event != Event.Enter || w3.node != ta) { pass false; }
+    Step:w4 = raw iter_next(doc, @it2);
+    Step:w5 = raw iter_next(doc, @it2);
+    // a leaf has no Exit: after Enter a, the next event is Enter of its sibling
+    if (w4.event != Event.Enter || w4.node != e) { pass false; }
+    if (w5.event != Event.Enter || w5.node != tb) { pass false; }
+
+    // two iterators over one document are independent
+    Iter:ia = raw iter_new(p3);
+    Iter:ib = raw iter_new(p3);
+    Step:a1 = raw iter_next(doc, @ia);
+    Step:a2 = raw iter_next(doc, @ia);
+    Step:b1 = raw iter_next(doc, @ib);
+    if (a1.node != p3 || a2.node != td || b1.node != p3) { pass false; }
+    if (b1.event != Event.Enter) { pass false; }
+
+    // a walk sees tree surgery done before it starts
+    drop node_unlink(@doc, e);
+    if (!(relay dump_is(doc, d, "D(P(t[a]b)P()P(t[d]))"))) { pass false; }
+    int64:px = raw mk(@doc, NodeKind.Paragraph);
+    drop node_insert_after(@doc, p1, px);
+    pass relay dump_is(doc, d, "D(P(t[a]b)P()P()P(t[d]))");
+};
+
+// ---- group 17: the walk's one permitted mutation ---------------------------
+
+// A walk that, on Enter of each Paragraph, adds a Text child to it and edits its
+// own source position: cmark's process_inlines does exactly this.
+func:g_walk_mutation = bool() {
+    Document:doc = relay doc_new();
+    int64:d = raw mk(@doc, NodeKind.DocumentNode);
+    int64:p1 = raw mk(@doc, NodeKind.Paragraph);
+    int64:p2 = raw mk(@doc, NodeKind.Paragraph);
+    int64:q = raw mk(@doc, NodeKind.BlockQuote);
+    drop node_append_child(@doc, d, p1);
+    drop node_append_child(@doc, d, q);
+    drop node_append_child(@doc, q, p2);
+
+    Iter:it = raw iter_new(d);
+    bool:done = false;
+    int64:enters = 0i64;
+    int64:guard = 0i64;
+    while (!done && guard < 1000i64) decreases 1000i64 - guard {
+        guard = guard + 1i64;
+        Step:s = raw iter_next(doc, @it);
+        if (s.event == Event.Done) {
+            done = true;
+        } else {
+            if (s.event == Event.Enter) {
+                enters = enters + 1i64;
+                NodeInfo:i = raw node_info(doc, s.node);
+                if (i.kind == NodeKind.Paragraph) {
+                    int64:t = relay mk_text(@doc, "in");
+                    drop node_append_child(@doc, s.node, t);
+                    int64:b = raw mk(@doc, NodeKind.Softbreak);
+                    drop node_append_child(@doc, s.node, b);
+                    drop node_set_sourcepos(@doc, s.node, 4i64, 4i64, 4i64, 4i64);
+                    drop node_set_flags(@doc, s.node, false, true, true);
+                }
+            }
+        }
+    }
+    if (!done) { pass false; }
+    // D, P1, its two new children, Q, P2, its two new children: 8 Enters
+    if (enters != 8i64) { pass false; }
+    if (!(relay dump_is(doc, d, "D(P(t[in]b)q(P(t[in]b)))"))) { pass false; }
+    NodeInfo:i1 = raw node_info(doc, p1);
+    NodeInfo:i2 = raw node_info(doc, p2);
+    if (i1.start_line != 4i64 || i2.end_column != 4i64) { pass false; }
+    if (i1.open || !i1.last_line_blank || !i2.last_line_checked) { pass false; }
+
+    // the same walk, adding to the entered node's children, on a node that is
+    // the walk's own root
+    Iter:it2 = raw iter_new(p1);
+    Step:e1 = raw iter_next(doc, @it2);
+    int64:extra = relay mk_text(@doc, "tail");
+    drop node_append_child(@doc, e1.node, extra);
+    bool:done2 = false;
+    int64:guard2 = 0i64;
+    bool:saw = false;
+    while (!done2 && guard2 < 100i64) decreases 100i64 - guard2 {
+        guard2 = guard2 + 1i64;
+        Step:s = raw iter_next(doc, @it2);
+        if (s.event == Event.Done) { done2 = true; }
+        if (s.event == Event.Enter && s.node == extra) { saw = true; }
+    }
+    pass done2 && saw;
+};
+
+// ---- group 18: consolidate_text_nodes --------------------------------------
+
+func:g_consolidate = bool() {
+    Document:doc = relay doc_new();
+    int64:d = raw mk(@doc, NodeKind.DocumentNode);
+    int64:p = raw mk(@doc, NodeKind.Paragraph);
+    int64:e = raw mk(@doc, NodeKind.Emph);
+    drop node_append_child(@doc, d, p);
+    int64:a = relay mk_text(@doc, "a");
+    int64:b = relay mk_text(@doc, "b");
+    int64:c = relay mk_text(@doc, "c");
+    int64:dd = relay mk_text(@doc, "d");
+    int64:ee = relay mk_text(@doc, "e");
+    drop node_append_child(@doc, p, a);
+    drop node_append_child(@doc, p, b);
+    drop node_append_child(@doc, p, e);
+    drop node_append_child(@doc, e, c);
+    drop node_append_child(@doc, p, dd);
+    drop node_append_child(@doc, p, ee);
+    if (!(relay dump_is(doc, d, "D(P(t[a]t[b]e(t[c])t[d]t[e]))"))) { pass false; }
+
+    drop consolidate_text_nodes(@doc, d);
+    if (!(relay dump_is(doc, d, "D(P(t[ab]e(t[c])t[de]))"))) { pass false; }
+    // the survivors are the first node of each run; the merged ones are unlinked
+    if (!(relay lit_is(doc, a, "ab"))) { pass false; }
+    if (!(relay lit_is(doc, dd, "de"))) { pass false; }
+    if (!(raw links(doc, b, -1i64, -1i64, -1i64, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, ee, -1i64, -1i64, -1i64, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, p, d, a, dd, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, a, p, -1i64, -1i64, e, -1i64))) { pass false; }
+    if (!(raw links(doc, dd, p, -1i64, -1i64, -1i64, e))) { pass false; }
+    // a second pass changes nothing
+    drop consolidate_text_nodes(@doc, d);
+    if (!(relay dump_is(doc, d, "D(P(t[ab]e(t[c])t[de]))"))) { pass false; }
+
+    // runs of three, empty literals, a break that separates runs
+    int64:p2 = raw mk(@doc, NodeKind.Paragraph);
+    drop node_append_child(@doc, d, p2);
+    int64:x1 = relay mk_text(@doc, "x");
+    int64:x2 = relay mk_text(@doc, "");
+    int64:x3 = relay mk_text(@doc, "z");
+    int64:sb = raw mk(@doc, NodeKind.Softbreak);
+    int64:y1 = relay mk_text(@doc, "y");
+    int64:y2 = relay mk_text(@doc, "w");
+    drop node_append_child(@doc, p2, x1);
+    drop node_append_child(@doc, p2, x2);
+    drop node_append_child(@doc, p2, x3);
+    drop node_append_child(@doc, p2, sb);
+    drop node_append_child(@doc, p2, y1);
+    drop node_append_child(@doc, p2, y2);
+    drop consolidate_text_nodes(@doc, d);
+    if (!(relay dump_is(doc, p2, "P(t[xz]bt[yw])"))) { pass false; }
+    if (!(relay dump_is(doc, d, "D(P(t[ab]e(t[c])t[de])P(t[xz]bt[yw]))"))) { pass false; }
+
+    // consolidating under a subtree leaves the rest of the document alone
+    int64:p3 = raw mk(@doc, NodeKind.Paragraph);
+    int64:p4 = raw mk(@doc, NodeKind.Paragraph);
+    drop node_append_child(@doc, d, p3);
+    drop node_append_child(@doc, d, p4);
+    int64:m1 = relay mk_text(@doc, "1");
+    int64:m2 = relay mk_text(@doc, "2");
+    int64:n1 = relay mk_text(@doc, "3");
+    int64:n2 = relay mk_text(@doc, "4");
+    drop node_append_child(@doc, p3, m1);
+    drop node_append_child(@doc, p3, m2);
+    drop node_append_child(@doc, p4, n1);
+    drop node_append_child(@doc, p4, n2);
+    drop consolidate_text_nodes(@doc, p3);
+    if (!(relay dump_is(doc, p3, "P(t[12])"))) { pass false; }
+    if (!(relay dump_is(doc, p4, "P(t[3]t[4])"))) { pass false; }
+    drop consolidate_text_nodes(@doc, d);
+    if (!(relay dump_is(doc, p4, "P(t[34])"))) { pass false; }
+
+    // text with only text: one survivor; a parent with a single text is unchanged
+    int64:p5 = raw mk(@doc, NodeKind.Paragraph);
+    int64:only = relay mk_text(@doc, "solo");
+    drop node_append_child(@doc, p5, only);
+    drop consolidate_text_nodes(@doc, p5);
+    if (!(relay dump_is(doc, p5, "P(t[solo])"))) { pass false; }
+    // a hundred texts become one, in order
+    int64:p6 = raw mk(@doc, NodeKind.Paragraph);
+    int64:i = 0i64;
+    while (i < 100i64) decreases 100i64 - i {
+        int64:t = relay mk_text(@doc, "ab");
+        drop node_append_child(@doc, p6, t);
+        i = i + 1i64;
+    }
+    drop consolidate_text_nodes(@doc, p6);
+    NodeInfo:i6 = raw node_info(doc, p6);
+    if (i6.first_child != i6.last_child) { pass false; }
+    string:big = relay node_literal(doc, i6.first_child);
+    if (big.len != 200i64) { pass false; }
+    // the consolidation keeps the node's kind and parent
+    NodeInfo:ia = raw node_info(doc, a);
+    pass ia.kind == NodeKind.Text && ia.parent == p;
+};
+
+// ---- group 19: reference lookup through the document -----------------------
+
+func:fill_refs = RefMap() {
+    RefMap:m = relay refmap_new();
+    string:lab = "Foo";
+    string:url = "/url";
+    string:ttl = "the title";
+    relay refmap_add(@m, lab, raw chunk_all(lab), url, raw chunk_all(url), ttl, raw chunk_all(ttl));
+    string:lab2 = "bar  baz";
+    string:url2 = "http://x.org/a%20b";
+    string:ttl2 = "";
+    relay refmap_add(@m, lab2, raw chunk_all(lab2), url2, raw chunk_all(url2), ttl2, raw chunk_all(ttl2));
+    pass m;
+};
+
+func:lookup_found = bool(Document:doc, string:label, string:url, string:title) {
+    RefHit:h = relay doc_ref_lookup(doc, label, raw chunk_all(label));
+    if (!h.found) { pass false; }
+    pass raw nstr_eq(h.url, url) && raw nstr_eq(h.title, title);
+};
+
+func:lookup_missing = bool(Document:doc, string:label) {
+    RefHit:h = relay doc_ref_lookup(doc, label, raw chunk_all(label));
+    pass !h.found;
+};
+
+func:g_ref_lookup = bool() {
+    Document:doc = relay doc_new();
+    // a fresh document answers "not found" for anything
+    if (!(relay lookup_missing(doc, "foo"))) { pass false; }
+    if (!(relay lookup_missing(doc, ""))) { pass false; }
+    RefHit:miss = relay doc_ref_lookup(doc, "foo", raw chunk_all("foo"));
+    if (miss.found) { pass false; }
+
+    RefMap:m = relay fill_refs();
+    drop doc_set_refs(@doc, move(m));
+    // found by the normalised label: case-folded, whitespace collapsed
+    if (!(relay lookup_found(doc, "foo", "/url", "the title"))) { pass false; }
+    if (!(relay lookup_found(doc, "FOO", "/url", "the title"))) { pass false; }
+    if (!(relay lookup_found(doc, "fOo", "/url", "the title"))) { pass false; }
+    if (!(relay lookup_found(doc, "BAR baz", "http://x.org/a%20b", ""))) { pass false; }
+    if (!(relay lookup_found(doc, "bar \t baz", "http://x.org/a%20b", ""))) { pass false; }
+    if (!(relay lookup_missing(doc, "foo bar"))) { pass false; }
+    if (!(relay lookup_missing(doc, "fo"))) { pass false; }
+    if (!(relay lookup_missing(doc, "barbaz"))) { pass false; }
+
+    // the lookup works on a chunk of a larger base
+    string:base = "see [Foo] and [nothing]";
+    Chunk:inside = raw chunk_of(base, 5i64, 3i64);
+    RefHit:h = relay doc_ref_lookup(doc, base, inside);
+    if (!h.found || !(raw nstr_eq(h.url, "/url"))) { pass false; }
+    Chunk:out = raw chunk_of(base, 15i64, 7i64);
+    RefHit:h2 = relay doc_ref_lookup(doc, base, out);
+    if (h2.found) { pass false; }
+
+    // the map belongs to the document: it survives tree work, and lookups repeat
+    int64:p = raw mk(@doc, NodeKind.Paragraph);
+    int64:t = relay mk_text(@doc, "x");
+    drop node_append_child(@doc, p, t);
+    if (!(relay lookup_found(doc, "foo", "/url", "the title"))) { pass false; }
+
+    // installing another map replaces the first
+    RefMap:m2 = relay refmap_new();
+    string:lab = "only";
+    string:url = "/two";
+    string:ttl = "t2";
+    relay refmap_add(@m2, lab, raw chunk_all(lab), url, raw chunk_all(url), ttl, raw chunk_all(ttl));
+    drop doc_set_refs(@doc, move(m2));
+    if (!(relay lookup_found(doc, "ONLY", "/two", "t2"))) { pass false; }
+    pass relay lookup_missing(doc, "foo");
+};
+
+// ---- group 20: growth ------------------------------------------------------
+
+func:g_growth = bool() {
+    Document:doc = relay doc_new();
+    int64:d = raw mk(@doc, NodeKind.Paragraph);
+    int64:first = relay mk_text(@doc, "first");
+    drop node_append_child(@doc, d, first);
+    NodeInfo:i0 = raw node_info(doc, first);
+    int64:n = 3000i64;
+    int64:i = 0i64;
+    int64:prev = first;
+    while (i < n) decreases n - i {
+        int64:t = raw mk(@doc, NodeKind.Softbreak);
+        if (t == prev || t < 0i64) { pass false; }
+        drop node_append_child(@doc, d, t);
+        prev = t;
+        i = i + 1i64;
+    }
+    // every early reference is still good after the store has grown
+    if (!(relay lit_is(doc, first, "first"))) { pass false; }
+    NodeInfo:i1 = raw node_info(doc, first);
+    if (i1.kind != NodeKind.Text || i1.parent != d || i1.prev != -1i64) { pass false; }
+    NodeInfo:id = raw node_info(doc, d);
+    if (id.first_child != first || id.last_child != prev) { pass false; }
+
+    // the walk visits every node once: count Enters
+    Iter:it = raw iter_new(d);
+    int64:enters = 0i64;
+    int64:exits = 0i64;
+    bool:done = false;
+    int64:guard = 0i64;
+    while (!done && guard < 20000i64) decreases 20000i64 - guard {
+        guard = guard + 1i64;
+        Step:s = raw iter_next(doc, @it);
+        if (s.event == Event.Done) { done = true; }
+        if (s.event == Event.Enter) { enters = enters + 1i64; }
+        if (s.event == Event.Exit) { exits = exits + 1i64; }
+    }
+    // leaves are Enter-only: the parent alone has an Exit
+    if (!done || enters != n + 2i64 || exits != 1i64) { pass false; }
+
+    // a deep chain: each node the only child of the last (depth 2000)
+    int64:top = raw mk(@doc, NodeKind.BlockQuote);
+    int64:cur = top;
+    int64:k = 0i64;
+    while (k < 2000i64) decreases 2000i64 - k {
+        int64:nx = raw mk(@doc, NodeKind.BlockQuote);
+        drop node_append_child(@doc, cur, nx);
+        cur = nx;
+        k = k + 1i64;
+    }
+    Iter:it2 = raw iter_new(top);
+    int64:depth = 0i64;
+    int64:maxdepth = 0i64;
+    bool:done2 = false;
+    int64:guard2 = 0i64;
+    while (!done2 && guard2 < 10000i64) decreases 10000i64 - guard2 {
+        guard2 = guard2 + 1i64;
+        Step:s = raw iter_next(doc, @it2);
+        if (s.event == Event.Done) { done2 = true; }
+        if (s.event == Event.Enter) {
+            depth = depth + 1i64;
+            if (depth > maxdepth) { maxdepth = depth; }
+        }
+        if (s.event == Event.Exit) { depth = depth - 1i64; }
+    }
+    pass done2 && maxdepth == 2001i64 && depth == 0i64;
+};
+
+// ---- group 21: the root of a document (a reading of the contract) ----------
+
+// INTERFACES.md says an empty document has "no root" and that doc_root reads
+// it, but not what sets it. The reading here: the first DocumentNode made with
+// node_new becomes the root; kinds other than DocumentNode never do.
+func:g_root = bool() {
+    Document:doc = relay doc_new();
+    int64:p = raw mk(@doc, NodeKind.Paragraph);
+    if (raw doc_root(doc) != -1i64) { pass false; }
+    int64:d = raw mk(@doc, NodeKind.DocumentNode);
+    if (raw doc_root(doc) != d) { pass false; }
+    drop node_append_child(@doc, d, p);
+    pass raw doc_root(doc) == d;
+};
+
+// ---- group 22: prepend into an empty parent --------------------------------
+
+func:g_prepend_empty = bool() {
+    Document:doc = relay doc_new();
+    int64:q = raw mk(@doc, NodeKind.Strong);
+    int64:y = relay mk_text(@doc, "y");
+    drop node_prepend_child(@doc, q, y);
+    if (!(raw links(doc, y, q, -1i64, -1i64, -1i64, -1i64))) { pass false; }
+    if (!(raw links(doc, q, -1i64, y, y, -1i64, -1i64))) { pass false; }
+    // and a second prepend then goes in front
+    int64:x = relay mk_text(@doc, "x");
+    drop node_prepend_child(@doc, q, x);
+    pass relay dump_is(doc, q, "s(t[x]t[y])");
+};
+
+func:check_all = int32() {
+    if (!(relay g_create())) { pass 11i32; }
+    if (!(relay g_append())) { pass 12i32; }
+    if (!(relay g_surgery())) { pass 13i32; }
+    if (!(relay g_strings())) { pass 14i32; }
+    if (!(relay g_plain())) { pass 15i32; }
+    if (!(relay g_iterator())) { pass 16i32; }
+    if (!(relay g_walk_mutation())) { pass 17i32; }
+    if (!(relay g_consolidate())) { pass 18i32; }
+    if (!(relay g_ref_lookup())) { pass 19i32; }
+    if (!(relay g_growth())) { pass 20i32; }
+    if (!(relay g_root())) { pass 21i32; }
+    if (!(relay g_prepend_empty())) { pass 22i32; }
+    pass 0i32;
+};
+
+func:main = int32(cstring[]:_~argv) {
+    Result<int32>:outcome = check_all();
+    if (outcome.is_error) { !!! outcome.err; }
+    exit outcome.value;
+};
+
+// Any returned error is forwarded here unchanged by main.
+func:failsafe = int32(Error:err) {
+    pick (err) {
+        (Unreachable, HeapOom, HeapBadRequest, WildLeak, StackExhausted,
+         MachineFault, DivByZero, DivOverflow, IntOverflow, OutOfBounds,
+         DecreasesViolated, LimitViolated) { exit 100i32; },
+        (*) { exit 100i32; }
+    }
+};
