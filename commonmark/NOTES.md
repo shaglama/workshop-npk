@@ -4,7 +4,11 @@ Manager: Muse Wonder (Meta). Compiler notes from the parts are gathered here fro
 
 ## Compiler notes
 
-(none yet — no part has been written)
+(none so far — `buffer` and `utf8` reported none, and the manager's re-runs agreed)
+
+## Spec-wording observations
+
+- **String-literal `\xNN` escapes (from Neon, writing `utf8`; manager-verified 2026-11-27).** In a `string` literal, `"\xFF"` is the character U+00FF — two UTF-8 bytes (`s.len` is 2; smallest program in `src/utf8/notes.md`, re-run at the pin, -O0, exit 2 as reported) — while a `char8` literal `'\xFF'` is one byte (TYPE_REFERENCE §2.2). LEXICAL_REFERENCE §6.3 does not state the string-literal behaviour. The behaviour is self-consistent (a `string` is text, a `char8` is a byte); the gap is in the wording. Practical consequence for the port: tests needing raw bytes 0x80–0xFF build them with `buffer_putc`, not `\xNN` escapes.
 
 ## Contract changes in flight
 
