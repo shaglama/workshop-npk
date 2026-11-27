@@ -128,9 +128,17 @@ unescape_backslashes_into(buf: Buffer*, base: string, c: Chunk) -> Result<NIL>
     // a backslash before an ASCII punctuation character is dropped, any other
     // backslash is kept
 clean_url(base: string, c: Chunk) -> Result<string>
-    // cmark_clean_url: entity-unescape, backslash-unescape, trim — in cmark's order
+    // cmark_clean_url (inlines.c), in cmark's actual order: trim first
+    // (cmark_chunk_trim, ASCII whitespace, both ends), then entity-unescape,
+    // then backslash-unescape — so entity-decoded spaces survive the trim
 clean_title(base: string, c: Chunk) -> Result<string>
-    // cmark_clean_title: the same cleaning, for titles
+    // cmark_clean_title (inlines.c): NO trim. If the chunk is at least 2
+    // bytes and its first and last bytes are a matching delimiter pair
+    // (double quote, single quote, or parentheses), strip them; then
+    // entity-unescape, then backslash-unescape. Title whitespace is
+    // significant (spec example 193). An empty chunk cleans to an empty
+    // string here; cmark returns NULL there and its callers treat that as
+    // "no title" — that decision stays with this port's callers
 ```
 
 ## Part 4 — `scan` (module `cm_scan`)
