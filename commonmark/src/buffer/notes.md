@@ -1,3 +1,70 @@
+Queue line done: 2. `next` — **part review: utf8**.
+
+Queue line blocked: 1. `blocked: manager review` — **node part** (src/node/).
+
+# UTF-8 part review — Sol (OpenAI), 2026-11-27
+
+**Changes requested for `utf8_check`.** This review is recorded here because
+`assign/sol.txt` includes the buffer folder and the manager owns
+`reviews/utf8.md`.
+
+## Finding
+
+The shared text convention calls for cmark's repair behavior under
+`validate_utf8`. The port's `valid_utf8_len` implements Unicode
+maximal-subpart grouping. The tagged cmark validator checks nominal width
+against the remaining bytes first. For a complete nominal sequence, it checks
+continuations before applying scalar restrictions. This changes how many bytes
+one U+FFFD consumes. [Interface contract](../../INTERFACES.md)
+[Port validator](../utf8/cm_utf8.npk#L138)
+[cmark 0.31.2 validator](https://raw.githubusercontent.com/commonmark/cmark/0.31.2/src/utf8.c)
+
+The following differences were reproduced against the tagged C functions with
+a byte-output adapter. Each output was identical across `-O0` and `-O2`.
+
+| Input bytes | cmark 0.31.2 | Nitpick port |
+|---|---|---|
+| `C0 AF` | 1 × U+FFFD | 2 × U+FFFD |
+| `ED A0 80` | 1 × U+FFFD | 3 × U+FFFD |
+| `F4 90 80 80` or `F5 80 80 80` | 1 × U+FFFD | 4 × U+FFFD |
+| `E2 41` at the end of a chunk | U+FFFD | U+FFFD, then `A` |
+| `E0 80 41` | U+FFFD, then `A` | 2 × U+FFFD, then `A` |
+
+In a copy of the writer harness, change the `expect_check(ov2, raw chunk_all(ov2), fffd2)`
+expectation from `fffd2` to `fffd`. The harness exits 84 at both levels.
+The surrogate and above-maximum cases in the harness likewise expect the port's
+current output. [Writer harness](../utf8/checks/check_utf8.npk#L264)
+
+Match the tagged validator's byte consumption in `utf8_check` and update its
+writer expectations. Include a short nominal sequence at a nonzero chunk
+offset to exercise the chunk boundary. Keep `utf8_iterate`'s contractually
+specified one-byte advance on invalid input.
+
+## Checks
+
+- All six groups in the supplied `check_utf8.npk` harness passed with the real
+  `cm_buffer` at `-O0` and `-O2` using the IR, opt, llc, and static link
+  commands from the writer log. The six direct
+  signatures and failure marks match Part 2, and the fallible calls relay
+  buffer errors unchanged. [Writer log](../utf8/checks/check.log)
+- Compared ten byte ranges with the tagged C implementations at both levels.
+  Repair differed on six inputs and case folding matched on all ten. Both
+  the Nitpick probe and C oracle exited 0 at both levels.
+- Table regeneration was byte-identical on Python with Unicode 15.0.0 data.
+  A separate comparison matched all 1,559 non-ASCII folds, including 104
+  expansions, to `spec/case_fold.inc`, and all 8,580 non-ASCII punctuation and
+  symbol code points to the tagged C predicate.
+  [cmark 0.31.2 `src/utf8.c`](https://raw.githubusercontent.com/commonmark/cmark/0.31.2/src/utf8.c)
+- Compiler pin `3a45b7c4`, LLVM 20.1.2.
+  `npkc` SHA-256 `23022ef161268018fb83227c8f5f0f26d80917eff715af738c7e7e54a41f90a0`.
+  `npkrt.o` SHA-256 `c8e5033ad17c70f838d567157738a6cc046af0ca3140ad92259fa71f0e747b4e`.
+
+## Compiler notes
+
+Checked the lab's known issues. No new compiler fault observed. The existing
+`"\xFF"` documentation example exited 2 at both `-O0` and `-O2`.
+[UTF-8 notes](../utf8/notes.md)
+
 # Buffer — Sol (OpenAI)
 
 Part 1 implementation and writer checks are complete. Every function in the
