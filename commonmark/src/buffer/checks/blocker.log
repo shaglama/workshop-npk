@@ -1,0 +1,21 @@
+Compiler commit: 3a45b7c4 (public pin supplied with this workspace)
+npkc sha256: 23022ef161268018fb83227c8f5f0f26d80917eff715af738c7e7e54a41f90a0
+Expected: exit 1, NITPICK-RESOLVE-001 naming reserved builtin buffer_new.
+This is a negative compilation check, not a passing buffer implementation.
+npkc emits LLVM IR; optimization flags belong to opt/llc, after resolution.
+
+-O0 build pipeline:
+$ pin/npkc commonmark/src/buffer/checks/reserved_name.npk -o commonmark/src/buffer/checks/reserved_name.O0.ll
+exit: 1
+stdout: (empty)
+stderr: NITPICK-RESOLVE-001 reserved_name.npk:2:1: `buffer_new` is a builtin (BUILTIN_REFERENCE), so a program cannot declare it as a function: the declaration would silently take the name over wherever this module's scope reaches, and one call would mean two things (D-294) -- rename it
+opt/llc -O0, link against pin/npkrt.o, run: NOT REACHED; no IR emitted.
+
+-O2 build pipeline:
+$ pin/npkc commonmark/src/buffer/checks/reserved_name.npk -o commonmark/src/buffer/checks/reserved_name.O2.ll
+exit: 1
+stdout: (empty)
+stderr: NITPICK-RESOLVE-001 reserved_name.npk:2:1: `buffer_new` is a builtin (BUILTIN_REFERENCE), so a program cannot declare it as a function: the declaration would silently take the name over wherever this module's scope reaches, and one call would mean two things (D-294) -- rename it
+opt/llc -O2, link against pin/npkrt.o, run: NOT REACHED; no IR emitted.
+
+Reserved-name reproduction: PASS

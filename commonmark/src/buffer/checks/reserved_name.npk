@@ -1,0 +1,2 @@
+mod:reserved_name;
+pub func:buffer_new = NIL() { pass NIL; };
