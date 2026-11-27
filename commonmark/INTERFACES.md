@@ -7,8 +7,24 @@ Signatures are written `name(param: Type, …) -> Return`. The notation:
 - A plain parameter of an owning type is **lent**: the callee reads it, the caller keeps it, nothing is freed by the callee. (Nitpick's own rule for plain parameters.)
 - `Type*` means **passed by address** (`@value` at the call, as the prelude's `list_push(@l, …)` does): the callee may mutate through it for the duration of the call and keeps nothing afterwards.
 - `move Type` means the callee **takes ownership**; the caller writes `move(...)` and cannot use the value afterwards.
-- A returned owning value is owned by the caller.
+- A returned owning value is owned by the caller. **Nothing is ever returned lent** — a borrow that leaves the call is exactly what the Chunk convention below rules out.
+- The language has no tuple types and no anonymous struct types: every multi-field value in this contract is a **named struct**, and every payload struct is named.
 - Lengths, offsets and columns are `int64`, counted in **bytes**, everywhere. (cmark uses `int32_t` byte counts; the port widens them rather than juggling two widths.)
+
+## Failure: which signatures can fail, and the one caller rule
+
+Every Nitpick call returns a `Result` unless the callee is declared `never fails`, so every signature in this contract is marked one way or the other:
+
+- `-> T never fails` — the function returns `T` directly; callers take it with `raw` where the language requires a spelling. Such a function may still *trap* (an overflow, a limit, an allocation failure on the trap route), as any code may; it never returns an error.
+- `-> Result<T>` — the function can return an error. Anything that builds an owned value through a fallible call is here: `.clone()` returns a `Result` because allocation can fail (TRAITS §2.5), so every getter that clones a string out of the store returns a `Result`, and so does every builder that assembles strings through such calls.
+
+**The one caller rule: relay the failure unchanged.** A function that calls a fallible function either handles the error itself (only the driver does, at the top) or relays it to its own caller unchanged — no renaming, no wrapping, no converting to a default. The error seam is the thing this project exists to exercise; a failure that arrives at the driver's `failsafe` should be the failure that occurred, with its identity intact.
+
+**The parse itself is total.** Every byte string parses to some document, and every document renders; cmark has no parse errors and neither does the port. Failures reach the program only as returned errors on the routes above (allocation, through fallible library calls) or as traps, plus the driver's own IO error below.
+
+No part contains a `main` or a `failsafe`, and no part defines error constants. The only error constant in the project is the driver's `InputError` (a file that cannot be read), which its `failsafe` maps to exit status 2.
+
+**Strange failures are compiler notes first.** A crash, output that differs between -O0 and -O2, or output that changes from run to run is recorded under "Compiler notes" (NOTES.md and the pull request) as a possible compiler fault *before* anyone debugs the port around it. This design runs along the compiler's ownership roads on purpose; those notes are what the project is for.
 
 ## Shared conventions
 
@@ -22,14 +38,7 @@ Chunk = { off: int64, len: int64 }
 
 A `Chunk` is a byte range inside a `string` **base**. It is meaningless on its own: every function that takes a `Chunk` also takes its base as a lent `string` parameter, named `base` in this contract. A `Chunk` never outlives the call it is passed to, and no part stores one. Functions that need text beyond the call copy it into an owned `string` (see `chunk_to_string` in the `buffer` part). This convention is the port's answer to cmark's pointer views, and it is deliberate: it keeps every borrow inside one call, where the language checks it.
 
-**Errors.** Parsing and rendering are **total**: every byte string parses to some document, and every document renders. No part returns a parse error, because cmark has none. Failures reach the program only through the language's own routes:
-
-- allocation failure (`HeapOom` and its census companions) — traps to the driver's `failsafe`, as in any Nitpick program;
-- file IO failure — the driver's own error, below.
-
-No part contains a `main` or a `failsafe`, and no part defines error constants. A part's functions either cannot fail, or relay a failure upward unchanged; no part renames another part's error. The only error constant in the project is the driver's `InputError` (a file that cannot be read), which its `failsafe` maps to exit status 2.
-
-**Options.** One struct, passed by value (it is plain data):
+**Options.** One struct of plain data, passed by value:
 
 ```
 Options = {
@@ -42,24 +51,40 @@ Options = {
 }
 ```
 
+## The import graph (acyclic — it must stay that way)
+
+```
+cm_buffer   → (nothing)
+cm_scan     → (nothing)
+cm_utf8     → cm_buffer
+cm_refs     → cm_buffer, cm_utf8, cm_scan
+cm_node     → cm_buffer, cm_refs
+cm_blocks   → cm_buffer, cm_utf8, cm_scan, cm_node, cm_refs
+cm_html     → cm_buffer, cm_utf8, cm_node
+cm_inlines  → cm_buffer, cm_utf8, cm_scan, cm_node, cm_refs, cm_html (entity unescape only)
+cm_main     → every part
+```
+
+No part imports a part that imports it back. In particular, `cm_blocks` and `cm_inlines` never import each other: the scanners they share live in `cm_scan`, and reference-definition parsing lives in `cm_refs`, so the two parsers meet only through `cm_node`, `cm_refs` and `cm_scan`. (Cycles across files are near a known open fault — see `lab/context/known-issues.md` — apart from being poor structure.)
+
 ## Part 1 — `buffer` (module `cm_buffer`)
 
 The growable byte buffer (cmark's `cmark_strbuf`) and the chunk helpers.
 
 ```
 Buffer                                  // owning, move-only; starts empty
-buffer_new() -> Buffer
-buffer_put(buf: Buffer*, base: string, c: Chunk)        // append the chunk's bytes
-buffer_puts(buf: Buffer*, s: string)                    // append a whole string
-buffer_putc(buf: Buffer*, b: int64)                     // append one byte (0–255)
-buffer_len(buf: Buffer) -> int64
-buffer_clear(buf: Buffer*)                              // keep the buffer, drop the contents
-buffer_detach(move buf: Buffer) -> string               // hand out the contents; the buffer is consumed
-chunk_of(base: string, off: int64, len: int64) -> Chunk // no copy; the caller guarantees the range is inside base
-chunk_all(base: string) -> Chunk
-chunk_to_string(base: string, c: Chunk) -> string       // an owned copy of the range
-chunk_trim(base: string, c: Chunk) -> Chunk             // narrow past spaces/tabs at both ends (cmark_isspace set)
-chunk_eq(base: string, c: Chunk, other: string) -> bool // byte equality with an owned string
+buffer_new() -> Result<Buffer>
+buffer_put(buf: Buffer*, base: string, c: Chunk) -> Result<NIL>   // append the chunk's bytes
+buffer_puts(buf: Buffer*, s: string) -> Result<NIL>               // append a whole string
+buffer_putc(buf: Buffer*, b: int64) -> Result<NIL>                // append one byte (0–255)
+buffer_len(buf: Buffer) -> int64 never fails
+buffer_clear(buf: Buffer*) never fails                            // keep the buffer, drop the contents
+buffer_detach(move buf: Buffer) -> string never fails             // hand out the contents; the buffer is consumed
+chunk_of(base: string, off: int64, len: int64) -> Chunk never fails  // no copy; caller guarantees the range is inside base
+chunk_all(base: string) -> Chunk never fails
+chunk_to_string(base: string, c: Chunk) -> Result<string>         // an owned copy of the range
+chunk_trim(base: string, c: Chunk) -> Chunk never fails           // narrow past spaces/tabs at both ends
+chunk_eq(base: string, c: Chunk, other: string) -> bool never fails  // byte equality with an owned string
 ```
 
 Ownership: a `Buffer` has exactly one owner at all times; `buffer_detach` is the only way text leaves it, and it consumes the buffer (cmark's detach leaves an empty buffer behind; consuming is the port's stricter spelling of the same hand-over, and callers that need another buffer make one).
@@ -69,175 +94,214 @@ Ownership: a `Buffer` has exactly one owner at all times; `buffer_detach` is the
 Character-level services over bytes. All functions read a chunk of a lent base.
 
 ```
-utf8_iterate(base: string, c: Chunk, pos: int64) -> (int64, int64)
-    // decode the character at byte offset pos inside the chunk:
-    // returns (codepoint, width in bytes). An invalid byte gives (0xFFFD, 1).
-utf8_encode(cp: int64, buf: Buffer*)                    // append cp as UTF-8; cp is a valid scalar or 0xFFFD
-utf8_check(base: string, c: Chunk, buf: Buffer*)        // append the chunk with every invalid sequence replaced by U+FFFD
-utf8_is_space(cp: int64) -> bool                        // cmark_utf8proc_is_space
-utf8_is_punct(cp: int64) -> bool                        // cmark_utf8proc_is_punctuation_or_symbol
-utf8_case_fold(base: string, c: Chunk, buf: Buffer*)    // append the case-folded form (for reference labels)
+Utf8Char = { cp: int64, width: int64 }  // plain data: a decoded character and its byte width
+
+utf8_iterate(base: string, c: Chunk, pos: int64) -> Utf8Char never fails
+    // the character at byte offset pos inside the chunk; an invalid byte gives { 0xFFFD, 1 }
+utf8_encode(cp: int64, buf: Buffer*) -> Result<NIL>   // append cp as UTF-8; cp is a valid scalar or 0xFFFD
+utf8_check(base: string, c: Chunk, buf: Buffer*) -> Result<NIL>
+    // append the chunk with every invalid sequence replaced by U+FFFD
+utf8_is_space(cp: int64) -> bool never fails          // cmark_utf8proc_is_space
+utf8_is_punct(cp: int64) -> bool never fails          // cmark_utf8proc_is_punctuation_or_symbol
+utf8_case_fold(base: string, c: Chunk, buf: Buffer*) -> Result<NIL>  // append the case-folded form
 ```
 
 The case-fold and character-class tables are generated data (see PLAN.md, "Data tables"); the functions above are the only way other parts reach them.
 
-## Part 3 — `node` (module `cm_node`)
+## Part 3 — `scan` (module `cm_scan`)
+
+The pattern scanners cmark generates from `scanners.re`, written by hand from the same patterns. Each scans a lent base from a byte position and returns the length matched, or 0 for no match. All are `never fails`. (cmark's take a chunk and an offset; the chunk convention makes the base explicit.)
+
+```
+scan_atx_heading_start(base: string, at: int64) -> int64 never fails
+scan_setext_heading_line(base: string, at: int64) -> int64 never fails
+scan_open_code_fence(base: string, at: int64) -> int64 never fails
+scan_close_code_fence(base: string, at: int64) -> int64 never fails
+scan_html_block_start(base: string, at: int64) -> int64 never fails
+scan_html_block_start_7(base: string, at: int64) -> int64 never fails
+scan_html_block_end_1 … scan_html_block_end_5(base: string, at: int64) -> int64 never fails
+scan_spacechars(base: string, at: int64) -> int64 never fails
+scan_scheme(base: string, at: int64) -> int64 never fails
+scan_autolink_uri(base: string, at: int64) -> int64 never fails
+scan_autolink_email(base: string, at: int64) -> int64 never fails
+scan_html_tag(base: string, at: int64) -> int64 never fails
+scan_html_comment(base: string, at: int64) -> int64 never fails
+scan_html_pi(base: string, at: int64) -> int64 never fails
+scan_html_declaration(base: string, at: int64) -> int64 never fails
+scan_html_cdata(base: string, at: int64) -> int64 never fails
+scan_link_title(base: string, at: int64) -> int64 never fails
+scan_dangerous_url(base: string, at: int64) -> int64 never fails
+```
+
+## Part 4 — `node` (module `cm_node`)
 
 The document tree. cmark links heap nodes with pointers; the port keeps every node in one store owned by the `Document`, and refers to nodes by index.
 
 ```
 NodeRef = int64            // an index into the Document's store; NO_NODE = -1
-Document = { … }           // owning; holds the node store and the root
+Document = { … }           // owning; holds the node store, the root, and the RefMap (below)
 
 NodeKind = enum {
-    None, Document, BlockQuote, List, Item, CodeBlock, HtmlBlock, CustomBlock,
+    None, DocumentNode, BlockQuote, List, Item, CodeBlock, HtmlBlock, CustomBlock,
     Paragraph, Heading, ThematicBreak,
     Text, Softbreak, Linebreak, Code, HtmlInline, CustomInline,
     Emph, Strong, Link, Image
 }
+ListType = enum { Bullet, Ordered }
 
-Node = {
+// The per-kind payloads, all named. The plain ones travel inside NodeInfo;
+// the ones holding strings (LinkData, CustomData, and CodeData's info) are
+// shapes only — their string fields cross this contract one at a time,
+// through the getters and setters below, never inside a returned struct.
+ListData    = { start: int64, list_type: ListType, delimiter: int64, bullet: int64,
+                marker_offset: int64, padding: int64, tight: bool }        // plain
+CodeData    = { info: string, fence_length: int64, fence_offset: int64,
+                fence_char: int64, fenced: bool }                          // info is a string
+HeadingData = { level: int64, setext: bool }                               // plain
+LinkData    = { url: string, title: string }                               // strings
+CustomData  = { on_enter: string, on_exit: string }                        // strings
+
+// Everything about a node that is plain data, copyable, and cheap to hand out:
+NodeInfo = {
     kind: NodeKind,
-    literal: string,                 // text content (Text, Code, Html*, CodeBlock body); empty otherwise
     parent, first_child, last_child, next, prev: NodeRef,
     start_line, start_column, end_line, end_column: int64,
-    // per-kind payload, exactly one meaningful per kind:
-    list:    { start: int64, list_type: ListType, delimiter: int64, bullet: int64,
-               marker_offset: int64, padding: int64, tight: bool },
-    code:    { info: string, fence_length: int64, fence_offset: int64, fence_char: int64, fenced: bool },
-    heading: { level: int64, setext: bool },
-    link:    { url: string, title: string },
-    custom:  { on_enter: string, on_exit: string },
+    list: ListData,
+    fence_length: int64, fence_offset: int64, fence_char: int64, fenced: bool,  // CodeData's plain fields
+    heading: HeadingData,
     html_block_type: int64,
-    // block-parser working flags (blocks part only; other parts do not read them):
-    open: bool, last_line_blank: bool, last_line_checked: bool
+    open: bool, last_line_blank: bool, last_line_checked: bool   // block-parser working flags
 }
-ListType = enum { Bullet, Ordered }
 ```
 
 Nodes are never removed from the store, so a `NodeRef` stays valid for the Document's whole life. Unlinking a node (consolidation does this) detaches it from its parent and siblings; the detached node remains in the store, unreachable from the root.
 
-```
-doc_new() -> Document
-doc_root(doc: Document) -> NodeRef
-node_new(doc: Document*, kind: NodeKind) -> NodeRef     // appended to the store, unattached, literal empty
-node_get(doc: Document, n: NodeRef) -> Node             // a copy of the node's plain fields;
-                                                        // string fields are NOT copied out by this call —
-                                                        // see node_literal / node_set_literal
-node_kind(doc: Document, n: NodeRef) -> NodeKind
-node_literal(doc: Document, n: NodeRef) -> string       // an owned clone of the literal ("" if none)
-node_set_literal(doc: Document*, n: NodeRef, move s: string)
-node_parent / node_first_child / node_last_child / node_next / node_prev
-    (doc: Document, n: NodeRef) -> NodeRef
-node_append_child(doc: Document*, parent: NodeRef, child: NodeRef)   // detach child from any siblings first
-node_prepend_child(doc: Document*, parent: NodeRef, child: NodeRef)
-node_insert_before(doc: Document*, sibling: NodeRef, n: NodeRef)
-node_insert_after(doc: Document*, sibling: NodeRef, n: NodeRef)
-node_unlink(doc: Document*, n: NodeRef)
-node_replace(doc: Document*, old: NodeRef, new: NodeRef)             // new takes old's place; old is unlinked
-node_set_link(doc: Document*, n: NodeRef, move url: string, move title: string)
-    // …and the matching field setters for the list/code/heading/custom payloads,
-    //    one per payload, same shape: plain fields by value, strings by move.
-consolidate_text_nodes(doc: Document*, root: NodeRef)
-    // merge adjacent Text siblings, as cmark_consolidate_text_nodes does
-```
-
-**Iterator** (the renderer's and inline part's way of walking):
+Reading a node is split the way the language requires: `node_info` hands out the plain data by copy, and each string a node holds is reached through its own getter (which clones, and so returns a `Result`) and setter (which takes the new string by `move`). There is no call that returns a whole node.
 
 ```
-Iter = { … }                       // a walk in progress over a lent Document
-iter_new(doc: Document, root: NodeRef) -> Iter
-iter_next(it: Iter*) -> (Event, NodeRef)   // Event = enum { Enter, Exit, Done }
+doc_new() -> Result<Document>
+doc_root(doc: Document) -> NodeRef never fails
+node_new(doc: Document*, kind: NodeKind) -> NodeRef never fails  // appended to the store, unattached, literal empty
+node_info(doc: Document, n: NodeRef) -> NodeInfo never fails
+node_literal(doc: Document, n: NodeRef) -> Result<string>        // a clone of the node's text ("" if none)
+node_set_literal(doc: Document*, n: NodeRef, move s: string) never fails
+node_code_info(doc: Document, n: NodeRef) -> Result<string>
+node_set_code_info(doc: Document*, n: NodeRef, move s: string) never fails
+node_link_url(doc: Document, n: NodeRef) -> Result<string>
+node_link_title(doc: Document, n: NodeRef) -> Result<string>
+node_set_link(doc: Document*, n: NodeRef, move url: string, move title: string) never fails
+node_custom_on_enter(doc: Document, n: NodeRef) -> Result<string>
+node_custom_on_exit(doc: Document, n: NodeRef) -> Result<string>
+node_set_custom(doc: Document*, n: NodeRef, move on_enter: string, move on_exit: string) never fails
+node_set_list(doc: Document*, n: NodeRef, d: ListData) never fails
+node_set_code_fence(doc: Document*, n: NodeRef, fence_length: int64, fence_offset: int64,
+                    fence_char: int64, fenced: bool) never fails
+node_set_heading(doc: Document*, n: NodeRef, d: HeadingData) never fails
+node_set_html_block_type(doc: Document*, n: NodeRef, t: int64) never fails
+node_set_sourcepos(doc: Document*, n: NodeRef, start_line: int64, start_column: int64,
+                   end_line: int64, end_column: int64) never fails
+node_set_flags(doc: Document*, n: NodeRef, open: bool, last_line_blank: bool,
+               last_line_checked: bool) never fails               // the blocks part's working flags
+node_append_child(doc: Document*, parent: NodeRef, child: NodeRef) never fails  // detaches child from any siblings first
+node_prepend_child(doc: Document*, parent: NodeRef, child: NodeRef) never fails
+node_insert_before(doc: Document*, sibling: NodeRef, n: NodeRef) never fails
+node_insert_after(doc: Document*, sibling: NodeRef, n: NodeRef) never fails
+node_unlink(doc: Document*, n: NodeRef) never fails
+node_replace(doc: Document*, target: NodeRef, replacement: NodeRef) never fails  // replacement takes target's place; target is unlinked
+consolidate_text_nodes(doc: Document*, root: NodeRef) never fails  // merge adjacent Text siblings, as cmark_consolidate_text_nodes does
+doc_ref_lookup(doc: Document, base: string, label: Chunk) -> Result<RefHit>   // see cm_refs for RefHit
 ```
+
+The node's tree links change only through the surgery calls (`node_append_child` … `node_replace`); `NodeInfo`'s link fields are a read view, not a handle to write through.
+
+**Iterator.** The iterator is plain state — it holds no borrow. The document is passed to each step.
+
+```
+Iter = { root: NodeRef, current: NodeRef, … }   // plain state for one walk
+Event = enum { Enter, Exit, Done }
+Step = { event: Event, node: NodeRef }           // plain data
+
+iter_new(root: NodeRef) -> Iter never fails
+iter_next(doc: Document, it: Iter*) -> Step never fails
+```
+
+What a walk may do to the tree while it runs (cmark's rule): a walk may **add children to the node whose `Enter` event it has just been given, and edit that node's own fields** — `process_inlines` works exactly this way. It may not unlink, replace, or add siblings to any node, and it may not touch any other node's children. The renderer changes nothing.
 
 Ownership: the `Document` owns every node and every string inside them. No other part frees, moves out of, or stores a node; parts hold `NodeRef` values freely (they are plain integers) and reach node contents only through the calls above, for as long as the `Document` lives. The driver owns the `Document` from `parser_finish` to the end of rendering.
 
-## Part 4 — `references` (module `cm_refs`)
+## Part 5 — `references` (module `cm_refs`)
 
 Link reference definitions, keyed by normalised label: case-folded (via `utf8_case_fold`), whitespace-collapsed, at most 1000 bytes of label (longer labels are not definitions and never match, per the spec).
 
 ```
 RefMap                                   // owning
-refmap_new() -> RefMap
-refmap_add(m: RefMap*, base: string, label: Chunk, move url: string, move title: string)
+RefHit = { found: bool, url: string, title: string }   // owning, move-only (it holds strings)
+
+refmap_new() -> Result<RefMap>
+refmap_add(m: RefMap*, base: string, label: Chunk, move url: string, move title: string) -> Result<NIL>
     // the first definition of a label wins; a later one is dropped (the strings are consumed either way)
-refmap_lookup(m: RefMap, base: string, label: Chunk) -> (bool, string, string)
-    // (found, url, title); url and title are owned clones ("" when not found) —
-    // the map keeps its own copies, so what a caller does with the results cannot reach them
+refmap_lookup(m: RefMap, base: string, label: Chunk) -> Result<RefHit>
+    // url and title are owned clones — the map keeps its own copies, so what a
+    // caller does with the results cannot reach them
+RefParse = { consumed: int64 }           // plain data; consumed = 0 means "no definition here"
+parse_ref_definition(m: RefMap*, base: string, c: Chunk) -> Result<RefParse>
+    // cmark's parse_reference_inline, homed here so the block parser never imports
+    // the inline parser: if the chunk begins with one or more reference definitions,
+    // add each to the map and report the total bytes consumed; otherwise consume 0.
+    // Uses cm_scan's scan_link_title and cm_utf8's case folding through this part.
 ```
 
-## Part 5 — `blocks` (module `cm_blocks`)
+## Part 6 — `blocks` (module `cm_blocks`)
 
-The block parser. It owns the half-built `Document` and the `RefMap` until `parser_finish` hands the `Document` over.
+The block parser. It owns the half-built `Document` — including the `RefMap` the parser is filling, held to one side and moved into the `Document` at finish — until `parser_finish` hands the `Document` over.
 
 ```
 Parser = { … }                            // owning
-parser_new(opts: Options) -> Parser
-parser_feed(p: Parser*, bytes: string)    // any byte count, any split; line endings
-                                          // (\n, \r\n, lone \r) are the parser's business
-parser_finish(move p: Parser) -> Document // closes all open blocks, extracts nothing
-                                          // further; the RefMap is finished with
-parser_refmap(p: Parser) -> RefMap        // lent read of the map being built, for the
-                                          // inline part after finish — see below
+parser_new(opts: Options) -> Result<Parser>
+parser_feed(p: Parser*, bytes: string) -> Result<NIL>
+    // any byte count, any split; line endings (\n, \r\n, lone \r) are the parser's business.
+    // While feeding, the parser adds reference definitions to its own map by calling
+    // cm_refs' parse_ref_definition on the block content it assembles — field access
+    // inside the owning part, not a borrow that leaves a call.
+parser_finish(move p: Parser) -> Result<Document>
+    // closes all open blocks; the RefMap moves into the returned Document
 ```
 
-The lifecycle seam, stated once: `parser_finish` consumes the `Parser`. The `Document` it returns carries the `RefMap` with it (the `Document` struct holds it), because the inline part needs the map after the block structure is final. So part 3's `Document` has one more field than the tree alone needs:
+Turning each leaf block's raw content into inline nodes is part 7, called by the driver between finish and render (below). The block's raw content reaches the inline part through `node_literal` (a clone, so a `Result` the inline part relays).
+
+## Part 7 — `inlines` (module `cm_inlines`)
 
 ```
-Document = { nodes: …, root: NodeRef, refs: RefMap }
+process_inlines(doc: Document*, opts: Options) -> Result<NIL>
+    // walks the tree under the iterator's mutation rule; for every Paragraph and
+    // Heading node, parses its stored content into inline child nodes (Text, Code,
+    // Emph, Strong, Link, Image, breaks, HtmlInline, CustomInline), looking link
+    // references up through doc_ref_lookup and using the buffer/utf8/scan services
+    // and cm_html's entity unescape as the import graph assigns them.
 ```
 
-and the inline part reads the map through `doc_refs(doc: Document) -> RefMap` (lent), in `cm_node`'s module. cmark keeps parser, tree and map as separate objects with one owner (the parser, then the caller); the port keeps the same single-owner shape by moving the map into the `Document` at finish.
+Emphasis, link and image construction follow cmark's `inlines.c`, including its delimiter-stack treatment of `*`/`_` and bracket stack for links.
 
-Block parsing also finalises each leaf block's raw content; turning that content into inline nodes is part 6, called by the driver between finish and render (below).
-
-## Part 6 — `inlines` (module `cm_inlines`)
-
-```
-process_inlines(doc: Document*, opts: Options)
-    // walks the tree; for every Paragraph and Heading node, parses its stored
-    // content into inline child nodes (Text, Code, Emph, Strong, Link, Image,
-    // breaks, HtmlInline, CustomInline), using doc's RefMap for link references
-    // and the buffer/utf8/html-escape services as INTERFACES assigns them.
-```
-
-The block's raw content reaches this part through `node_literal` (an owned clone); the inline children are built with part 3's calls. Emphasis, link and image construction follow cmark's `inlines.c`, including its delimiter-stack treatment of `*`/`_` and bracket stack for links.
-
-## Scanners (owned by the parser parts, exported to each other)
-
-cmark generates these from `scanners.re`; the port writes them by hand from the same patterns, one home each, callable by both parser parts. Each takes a base and a chunk-position and returns the length matched, or 0:
-
-```
-scan_atx_heading_start, scan_setext_heading_line, scan_open_code_fence,
-scan_close_code_fence, scan_html_block_start, scan_html_block_start_7,
-scan_html_block_end_1 … scan_html_block_end_5, scan_spacechars     // cm_blocks
-scan_scheme, scan_autolink_uri, scan_autolink_email, scan_html_tag,
-scan_html_comment, scan_html_pi, scan_html_declaration, scan_html_cdata,
-scan_link_title, scan_dangerous_url                               // cm_inlines
-```
-
-Shape: `scan_x(base: string, at: int64) -> int64` — bytes matched starting at `at`, 0 for no match. (cmark's take a chunk and an offset; the port's chunk convention makes the base explicit.)
-
-## Part 7 — `html` (module `cm_html`)
+## Part 8 — `html` (module `cm_html`)
 
 The renderer, and the escaping services (cmark's houdini files), which the inline part also uses.
 
 ```
-render_html(doc: Document, root: NodeRef, opts: Options) -> string
+render_html(doc: Document, root: NodeRef, opts: Options) -> Result<string>
     // the whole document as HTML, owned by the caller
-escape_html_into(buf: Buffer*, base: string, c: Chunk, secure: bool)
-    // append the chunk with & < > " (and ' handling per houdini) escaped;
-    // secure also neutralises the insecure characters cmark lists
-escape_href_into(buf: Buffer*, base: string, c: Chunk)
+escape_html_into(buf: Buffer*, base: string, c: Chunk, secure: bool) -> Result<NIL>
+    // append the chunk with & < > " escaped; secure also neutralises the
+    // insecure characters cmark's houdini lists
+escape_href_into(buf: Buffer*, base: string, c: Chunk) -> Result<NIL>
     // append the chunk percent-escaped as an href, per houdini_escape_href
-unescape_entities_into(buf: Buffer*, base: string, c: Chunk)
+unescape_entities_into(buf: Buffer*, base: string, c: Chunk) -> Result<NIL>
     // append the chunk with entity and numeric character references replaced
     // by their characters (the entities.inc table, generated — see PLAN.md)
 ```
 
-`render_html` walks with part 3's iterator and follows cmark's `html.c`, including: raw HTML is escaped unless `opts.unsafe`; dangerous URLs (`javascript:`, `vbscript:`, `file:`, and `data:` except image media types) are replaced by the empty string unless `opts.unsafe`; `sourcepos` adds `data-sourcepos="l:c-l:c"` to block elements.
+`render_html` walks with part 4's iterator and follows cmark's `html.c`, including: raw HTML is escaped unless `opts.unsafe`; dangerous URLs (`javascript:`, `vbscript:`, `file:`, and `data:` except image media types) are replaced by the empty string unless `opts.unsafe`; `sourcepos` adds `data-sourcepos="l:c-l:c"` to block elements.
 
-## Part 8 — `driver` (module `cm_main`)
+## Part 9 — `driver` (module `cm_main`)
 
 The only executable part; the only `main` and `failsafe` in the project.
 
@@ -249,16 +313,16 @@ flags: --sourcepos --hardbreaks --nobreaks --unsafe --validate-utf8 --smart
 The driver's pipeline per input, which is also the project's definition of the whole conversion:
 
 ```
-Parser = parser_new(opts)
-parser_feed(parser, input)            // once, with the whole input
-Document = parser_finish(parser)      // the Document owns the RefMap now
+parser = parser_new(opts)               // Result — relayed to the failsafe by ?!
+parser_feed(parser, input)              // once, with the whole input
+document = parser_finish(parser)        // the Document owns the RefMap now
 process_inlines(document, opts)
-consolidate_text_nodes(document, root)   // cmark calls this in finish; the port calls it here, after inlines
+consolidate_text_nodes(document, root)  // cmark calls this in finish; the port calls it here, after inlines
 html = render_html(document, root, opts)
 write html to stdout
 ```
 
-Errors: a file that cannot be read fails with the driver's `InputError`, exit status 2, and a message on stderr naming the file. Allocation failures trap to the same `failsafe` with the language's own exit scheme for those errors. The driver states its full failsafe census in its own source, as every Nitpick program must.
+Errors: a file that cannot be read fails with the driver's `InputError`, exit status 2, and a message on stderr naming the file. Every other failure arrives by relay from the parts and reaches the same `failsafe` unchanged. The driver states its full failsafe census in its own source, as every Nitpick program must.
 
 ## What this contract does not decide
 

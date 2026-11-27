@@ -22,12 +22,13 @@ One folder per part under `src/`. cmark sources named are the porting reference 
 |---|---|---|---|---|---|---|
 | 1 | `buffer` | Growable byte buffer and the borrowed-view type every parser part reads through | `buffer.c/h`, `chunk.h` | Sol (OpenAI) | Neon (Google) | Astra |
 | 2 | `utf8` | UTF-8 iterate / encode / validate-and-repair, character classes, case folding; generated data tables | `utf8.c/h`, `case_fold.inc` | Neon (Google) | Sol (OpenAI) | Carbon |
-| 3 | `node` | The document tree: node store, node fields, tree surgery, the enter/exit iterator, text consolidation | `node.c/h`, `iterator.c/h` | Sol (OpenAI) | Astra (OpenAI) | Neon |
-| 4 | `references` | Link reference definitions: label normalisation, store, lookup | `references.c/h` | Neon (Google) | Sol (OpenAI) | Carbon |
-| 5 | `blocks` | Block structure: line feeding, open/close matching, leaf content, reference-definition extraction | `blocks.c`, `parser.h`, the block scanners in `scanners.re` | Astra (OpenAI) | Neon (Google) | Neon |
-| 6 | `inlines` | Inline structure within block content: text, code spans, emphasis, links and images, autolinks, raw HTML, entities, smart punctuation | `inlines.c`, the inline scanners in `scanners.re` | Carbon (Google) | Sol (OpenAI) | Neon |
-| 7 | `html` | The HTML renderer, including the escaping rules | `html.c`, `render.c/h`, `houdini_html_e.c`, `houdini_href_e.c`, `houdini_html_u.c`, `entities.inc` | Neon (Google) | Astra (OpenAI) | Muse (manager) |
-| 8 | `driver` | The program: options, input, parse → render, output, the one `failsafe` | `main.c`, `cmark.c` | Muse (manager) | Neon (Google) | — (the spec runner) |
+| 3 | `scan` | The pattern scanners both parsers share (headings, fences, HTML blocks and tags, autolinks, link titles, dangerous URLs) | `scanners.re` / `scanners.c`, `scanners.h` | Astra (OpenAI) | Sol (OpenAI) | Carbon |
+| 4 | `node` | The document tree: node store, node fields, tree surgery, the enter/exit iterator, text consolidation | `node.c/h`, `iterator.c/h` | Sol (OpenAI) | Astra (OpenAI) | Neon |
+| 5 | `references` | Link reference definitions: label normalisation, store, lookup, and parsing a definition out of block content | `references.c/h`, `parse_reference_inline` in `inlines.c` | Neon (Google) | Sol (OpenAI) | Carbon |
+| 6 | `blocks` | Block structure: line feeding, open/close matching, leaf content, reference-definition extraction | `blocks.c`, `parser.h` | Astra (OpenAI) | Neon (Google) | Neon |
+| 7 | `inlines` | Inline structure within block content: text, code spans, emphasis, links and images, autolinks, raw HTML, entities, smart punctuation | `inlines.c` | Carbon (Google) | Sol (OpenAI) | Neon |
+| 8 | `html` | The HTML renderer, including the escaping rules | `html.c`, `render.c/h`, `houdini_html_e.c`, `houdini_href_e.c`, `houdini_html_u.c`, `entities.inc` | Neon (Google) | Astra (OpenAI) | Muse (manager) |
+| 9 | `driver` | The program: options, input, parse → render, output, the one `failsafe` | `main.c`, `cmark.c` | Muse (manager) | Neon (Google) | — (the spec runner) |
 | — | `tests/` | The spec runner and the per-section score keeping | cmark's `test/spec.txt` | Muse (manager) | management | — |
 
 Rules that apply to every part (from the guide):
@@ -40,10 +41,10 @@ Rules that apply to every part (from the guide):
 ## Order and milestones
 
 1. **This plan and the contract** — pull request with only `PLAN.md` and `INTERFACES.md`; management reviews before any part is written. Once merged, the contract is frozen; a change goes through the manager as its own pull request naming the parts it affects.
-2. **Foundations:** `buffer` and `utf8` in parallel (no dependencies between them).
-3. **Tree:** `node` (depends on `buffer`), then `references` (depends on `buffer`, `utf8`).
-4. **Parsers:** `blocks` (depends on `node`, `references`, `utf8`), then `inlines` (depends on `node`, `references`, `utf8`, `buffer`).
-5. **Output:** `html` (depends on `node`, `utf8`), then `driver` (depends on all).
+2. **Foundations:** `buffer`, `utf8` and `scan` in parallel (no dependencies between them).
+3. **Tree and map:** `references` (depends on `buffer`, `utf8`, `scan`), then `node` (depends on `buffer`, `references` — the `Document` holds the map and answers lookups through it).
+4. **Output, then parsers:** `html` (depends on `node`, `buffer`, `utf8` — early, because `inlines` uses its entity unescape), then `blocks` (depends on `node`, `references`, `utf8`, `scan`), then `inlines` (depends on `node`, `references`, `utf8`, `scan`, `html`).
+5. **Driver** (depends on all).
 6. **The whole:** the spec runner over all 652 examples, pass counts recorded per spec section in `tests/RESULTS.md`; inputs beyond the spec compared against cmark 0.31.2's own output.
 7. **Final pull request** to `main` from `work/commonmark`, per `WORKFLOW.md`, with a "Compiler notes" section (see NOTES.md below). A half-done converter is acceptable if the pull request says exactly what passes and what does not.
 
@@ -55,7 +56,11 @@ Two cmark data files are too large to port by hand and are not code: `case_fold.
 
 ## Compiler faults
 
-When something looks like a compiler fault: check `lab/context/known-issues.md` first and say whether it matches a known one. Cut it to the smallest program that shows it and record that program, the compiler commit, and expected-versus-actual in `NOTES.md` under "Compiler notes", and again in the pull request. Work around it in the port and keep going; management passes it to the compiler project from there.
+When something looks like a compiler fault: check `lab/context/known-issues.md` first and say whether it matches a known one. Cut it to the smallest program that shows it and record that program, the compiler commit, and expected-versus-actual in `NOTES.md` under "Compiler notes", and again in the pull request. Work around it in the port and keep going; management passes it to the compiler project from there. A strange failure — a crash, output that differs between -O0 and -O2, or output that changes from run to run — is recorded as a possible compiler fault *before* anyone debugs the port around it.
+
+## Assignment files
+
+`commonmark/assign/<worker>.txt` (one each for sol, astra, neon, carbon) lists the folders under `commonmark/` that worker may write, one per line — their part folders from the table above, plus the seam-test folders for the parts they test. The launch script sends back only those folders. `PLAN.md`, `INTERFACES.md` and `assign/` itself are the manager's and are never listed. The files ship with the plan pull request and are updated by the manager, in the open, whenever an assignment changes.
 
 ## Licences and credit
 

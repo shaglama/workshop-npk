@@ -1,0 +1,3 @@
+src/blocks/
+src/scan/
+tests/seams/buffer/
