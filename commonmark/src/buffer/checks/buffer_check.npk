@@ -1,0 +1,146 @@
+// Written by Sol (OpenAI). Writer checks, not the independent seam suite.
+mod:buffer_check;
+use "../cm_buffer.npk".*;
+use "../../../../pin/lib/nio.npk".{NioW, nio_stdout, nio_line, nio_end};
+
+// These bases die before their results reach the caller, checking that neither
+// chunk_to_string nor detach returns a view of its source storage.
+func:copied_range = string() {
+    string:base = relay "prefix:owned:suffix".clone();
+    Chunk:c = raw chunk_of(base, 7i64, 5i64);
+    pass (relay chunk_to_string(base, c));
+};
+
+func:detached_text = string(move Buffer:buf) never fails {
+    pass (raw buffer_detach(move(buf)));
+};
+
+func:run_checks = int32() {
+    NioW:out = raw nio_stdout();
+    Buffer:empty = relay buffer_create();
+    if (!((raw buffer_len(empty)) == 0i64)) { pass 10i32; }
+    string:empty_text = raw buffer_detach(move(empty));
+    if (!(empty_text.len == 0i64)) { pass 11i32; }
+    relay nio_line(@out, "empty create/detach: PASS");
+
+    string:base = "xx \talpha beta\t yy";
+    Chunk:all = raw chunk_all(base);
+    if (!((all.off == 0i64) && (all.len == 18i64))) { pass 12i32; }
+    Chunk:part = raw chunk_of(base, 2i64, 14i64);
+    if (!((part.off == 2i64) && (part.len == 14i64))) { pass 13i32; }
+    Chunk:trimmed = raw chunk_trim(base, part);
+    if (!((trimmed.off == 4i64) && (trimmed.len == 10i64))) { pass 14i32; }
+    if (!(raw chunk_eq(base, trimmed, "alpha beta"))) { pass 15i32; }
+    if (!(!(raw chunk_eq(base, trimmed, "alpha betA")))) { pass 16i32; }
+    if (!(!(raw chunk_eq(base, trimmed, "alpha")))) { pass 17i32; }
+    string:copy = relay chunk_to_string(base, trimmed);
+    if (!(raw copy.eq("alpha beta"))) { pass 18i32; }
+    string:escaped_base_copy = relay copied_range();
+    if (!(raw escaped_base_copy.eq("owned"))) { pass 19i32; }
+    relay nio_line(@out, "chunk range/trim/equality/owned copy: PASS");
+
+    string:spaces = "x \t \ty";
+    Chunk:whitespace = raw chunk_of(spaces, 1i64, 4i64);
+    Chunk:trimmed_empty = raw chunk_trim(spaces, whitespace);
+    if (!((trimmed_empty.off == 5i64) && (trimmed_empty.len == 0i64))) { pass 20i32; }
+    Chunk:at_end = raw chunk_of(base, base.len, 0i64);
+    Chunk:still_empty = raw chunk_trim(base, at_end);
+    if (!((still_empty.off == base.len) && (still_empty.len == 0i64))) { pass 21i32; }
+    if (!(raw chunk_eq(base, at_end, ""))) { pass 22i32; }
+    string:empty_copy = relay chunk_to_string(base, at_end);
+    if (!(empty_copy.len == 0i64)) { pass 23i32; }
+    string:newlines = " \t\nA\r\t ";
+    Chunk:nl_all = raw chunk_all(newlines);
+    Chunk:nl_trim = raw chunk_trim(newlines, nl_all);
+    if (!(raw chunk_eq(newlines, nl_trim, "\nA\r"))) { pass 24i32; }
+    string:blank = "";
+    Chunk:blank_all = raw chunk_all(blank);
+    Chunk:blank_trim = raw chunk_trim(blank, blank_all);
+    if (!((blank_trim.off == 0i64) && (blank_trim.len == 0i64))) { pass 25i32; }
+    relay nio_line(@out, "empty/all-space chunks; preserve CR/LF: PASS");
+
+    Buffer:mixed = relay buffer_create();
+    relay buffer_put(@mixed, base, trimmed);
+    relay buffer_puts(@mixed, "!");
+    relay buffer_putc(@mixed, 10i64);
+    relay buffer_put(@mixed, base, at_end);
+    relay buffer_puts(@mixed, "");
+    if (!((raw buffer_len(mixed)) == 12i64)) { pass 26i32; }
+    string:mixed_text = raw detached_text(move(mixed));
+    if (!(raw mixed_text.eq("alpha beta!\n"))) { pass 27i32; }
+    relay nio_line(@out, "append chunk/string/byte; move/detach: PASS");
+
+    Buffer:bytes = relay buffer_create();
+    int64:i = 0i64;
+    while (i < 20000i64) decreases 20000i64 - i {
+        relay buffer_putc(@bytes, i % 256i64);
+        i = i + 1i64;
+    }
+    if (!((raw buffer_len(bytes)) == 20000i64)) { pass 28i32; }
+    string:binary = raw buffer_detach(move(bytes));
+    if (!(binary.len == 20000i64)) { pass 29i32; }
+    fixed uint8[]:binary_bytes = string_bytes(binary);
+    i = 0i64;
+    while (i < binary.len) decreases binary.len - i {
+        if (!(binary_bytes[i] == ((i % 256i64) =>! uint8))) { pass 30i32; }
+        i = i + 1i64;
+    }
+    relay nio_line(@out, "growth; 20000 bytes including NUL and invalid UTF-8: PASS");
+
+    Buffer:reuse = relay buffer_create();
+    relay buffer_puts(@reuse, binary);
+    Chunk:middle = raw chunk_of(binary, 127i64, 1024i64);
+    relay buffer_put(@reuse, binary, middle);
+    string:middle_copy = relay chunk_to_string(binary, middle);
+    if (!(raw chunk_eq(binary, middle, middle_copy))) { pass 31i32; }
+    if (!((raw buffer_len(reuse)) == 21024i64)) { pass 32i32; }
+    string:bulk_text = raw buffer_detach(move(reuse));
+    fixed uint8[]:bulk = string_bytes(bulk_text);
+    i = 0i64;
+    while (i < 21024i64) decreases 21024i64 - i {
+        int64:source_at = i;
+        if (i >= 20000i64) { source_at = 127i64 + i - 20000i64; }
+        if (!(bulk[i] == ((source_at % 256i64) =>! uint8))) { pass 33i32; }
+        i = i + 1i64;
+    }
+    relay nio_line(@out, "bulk string/chunk growth preserves every byte: PASS");
+
+    Buffer:cleared = relay buffer_create();
+    drop buffer_clear(@cleared);
+    relay buffer_puts(@cleared, binary);
+    drop buffer_clear(@cleared);
+    if (!((raw buffer_len(cleared)) == 0i64)) { pass 34i32; }
+    relay buffer_puts(@cleared, "reuse");
+    relay buffer_putc(@cleared, 255i64);
+    if (!((raw buffer_len(cleared)) == 6i64)) { pass 35i32; }
+    drop buffer_clear(@cleared);
+    relay buffer_puts(@cleared, "clean");
+    string:clean = raw buffer_detach(move(cleared));
+    if (!(raw clean.eq("clean"))) { pass 36i32; }
+    Buffer:clear_empty = relay buffer_create();
+    relay buffer_puts(@clear_empty, "discard");
+    drop buffer_clear(@clear_empty);
+    string:cleared_text = raw buffer_detach(move(clear_empty));
+    if (!(cleared_text.len == 0i64)) { pass 37i32; }
+    relay nio_line(@out, "clear empty/grown; reuse; clear then detach: PASS");
+    relay nio_end(@out);
+    pass 0i32;
+};
+
+pub func:main = int32(cstring[]:_args) {
+    Result<int32>:r = run_checks();
+    if (r.is_error) { exit 92i32; }
+    exit r.value;
+};
+
+// Complete census for this harness: checked arithmetic/index/cast/loop and
+// allocation/runtime traps below; returned clone/slice/IO errors reach *.
+// The part itself has no error constants, entry points or failsafe.
+pub func:failsafe = int32(Error:e) {
+    pick (e) {
+        (Unreachable, HeapOom, HeapBadRequest, WildLeak, StackExhausted,
+         MachineFault, DivByZero, DivOverflow, IntOverflow, OutOfBounds,
+         DecreasesViolated, CastRange) { exit 91i32; },
+        (*) { exit 92i32; }
+    }
+};

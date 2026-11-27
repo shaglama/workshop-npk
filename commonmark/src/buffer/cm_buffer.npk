@@ -1,0 +1,119 @@
+// Written by Sol (OpenAI).
+// Port of cmark 0.31.2's buffer.c/h and chunk.h (John MacFarlane and
+// contributors), under the BSD-2-Clause notices in ../../LICENSES/COPYING.
+mod:cm_buffer;
+
+// A Chunk is meaningful only with its lent base, within the current call.
+pub struct:Chunk = { int64:off; int64:len; };
+
+// Managed storage supplies the drop and makes Buffer move-only. Keeping its
+// fields hidden prevents callers from manufacturing aliases or changing size.
+pub struct:Buffer = { hidden buffer:storage; hidden int64:used; };
+
+pub func:buffer_create = Buffer() {
+    Buffer:out = Buffer{ storage: buffer_new(0i64), used: 0i64 };
+    pass out;
+};
+
+// Geometric growth gives amortized linear append cost. The new cell owns its
+// bytes; assignment drops the old cell only after its contents have been copied.
+func:reserve = NIL(Buffer->:buf, int64:needed) never fails {
+    if (needed <= buf.storage.len) { pass NIL; }
+    int64:capacity = buf.storage.len;
+    if (capacity < 32i64) { capacity = 32i64; }
+    if (capacity < needed) {
+        capacity = capacity + capacity / 2i64;
+        if (capacity < needed) { capacity = needed; }
+    }
+    buffer:grown = buffer_new(capacity);
+    int64:i = 0i64;
+    while (i < buf.used) decreases buf.used - i {
+        grown[i] = buf.storage[i];
+        i = i + 1i64;
+    }
+    buf.storage = move(grown);
+    pass NIL;
+};
+
+pub func:buffer_put = NIL(Buffer->:buf, string:base, Chunk:c) {
+    if (c.len == 0i64) { pass NIL; }
+    drop reserve(buf, buf.used + c.len);
+    fixed uint8[]:bytes = string_bytes(base);
+    int64:i = 0i64;
+    while (i < c.len) decreases c.len - i {
+        buf.storage[buf.used + i] = bytes[c.off + i];
+        i = i + 1i64;
+    }
+    buf.used = buf.used + c.len;
+    pass NIL;
+};
+
+pub func:buffer_puts = NIL(Buffer->:buf, string:s) {
+    Chunk:c = raw chunk_all(s);
+    pass (relay buffer_put(buf, s, c));
+};
+
+pub func:buffer_putc = NIL(Buffer->:buf, int64:b) {
+    drop reserve(buf, buf.used + 1i64);
+    // The contract supplies a byte in [0,255]. The checked cast preserves it.
+    buf.storage[buf.used] = b =>! uint8;
+    buf.used = buf.used + 1i64;
+    pass NIL;
+};
+
+pub func:buffer_len = int64(Buffer:buf) never fails { pass buf.used; };
+
+pub func:buffer_clear = NIL(Buffer->:buf) never fails {
+    buf.used = 0i64;
+    pass NIL;
+};
+
+pub func:buffer_detach = string(move Buffer:buf) never fails {
+    // The floor has no buffer-to-owned-string transfer. Copy into an owning
+    // string through its never-failing constructor; buf's cell then drops.
+    // Neither the slice nor the string view escapes this call.
+    fixed uint8[]:bytes = buf.storage[0i64...buf.used];
+    string:view = string_from_bytes(bytes.ptr, bytes.len);
+    pass string_concat(view, "");
+};
+
+pub func:chunk_of = Chunk(string:base, int64:off, int64:len) never fails {
+    // The caller guarantees this range is within base (INTERFACES.md).
+    pass Chunk{ off: off, len: len };
+};
+
+pub func:chunk_all = Chunk(string:base) never fails {
+    pass Chunk{ off: 0i64, len: base.len };
+};
+
+pub func:chunk_to_string = string(string:base, Chunk:c) {
+    pass (relay string_slice(base, c.off, c.off + c.len));
+};
+
+pub func:chunk_trim = Chunk(string:base, Chunk:c) never fails {
+    fixed uint8[]:bytes = string_bytes(base);
+    int64:lo = c.off;
+    int64:hi = c.off + c.len;
+    // The frozen port contract specifies space and tab, not cmark_isspace.
+    while (lo < hi) decreases hi - lo {
+        if ((bytes[lo] != 32u8) && (bytes[lo] != 9u8)) { break; }
+        lo = lo + 1i64;
+    }
+    while (hi > lo) decreases hi - lo {
+        if ((bytes[hi - 1i64] != 32u8) && (bytes[hi - 1i64] != 9u8)) { break; }
+        hi = hi - 1i64;
+    }
+    pass Chunk{ off: lo, len: hi - lo };
+};
+
+pub func:chunk_eq = bool(string:base, Chunk:c, string:other) never fails {
+    if (c.len != other.len) { pass false; }
+    fixed uint8[]:a = string_bytes(base);
+    fixed uint8[]:b = string_bytes(other);
+    int64:i = 0i64;
+    while (i < c.len) decreases c.len - i {
+        if (a[c.off + i] != b[i]) { pass false; }
+        i = i + 1i64;
+    }
+    pass true;
+};
