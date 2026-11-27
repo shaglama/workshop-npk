@@ -22,14 +22,14 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 
 ### Sol (OpenAI)
 
-1. `blocked: manager review` — **node part** (src/node/). Delivered 2026-11-27 (written by Sol 6.1, before the launcher fix) and under manager review — do not rewrite it.
+1. `blocked: manager review` — **node part** (src/node/). Delivered 2026-11-27 (written by Sol 6.1, before the launcher fix) and under manager review — do not rewrite it. Sol 6.2's first session made two small changes over that base (a gated cycle check; custom blocks accepting an allocated `None` node), with added checks — the manager review covers both layers.
 2. `next` — **part review: utf8**.
 
 ### Astra (OpenAI)
 
 1. `blocked: brief` — **blocks part** (src/blocks/). Brief: `briefs/blocks.md` (manager to post). Note the scan seam from `reviews/scan.md`: scanners return match lengths, not cmark's classification codes — derive heading level / block type from the matched text.
-2. `next` — **buffer seam confirmation pass** (tests/seams/buffer/). The seam tests in that folder were delivered 2026-11-27 under Astra's name but were written by Sol 6.2 (see the manager note below). Read them against INTERFACES.md Part 1 alone, run them, and add cases for anything the part's own author would miss; say what you added at the top of the folder's NOTES.md.
-3. `ready` — **part review: escape**.
+2. `blocked: manager review` — **buffer seam confirmation pass** (tests/seams/buffer/). Delivered 2026-11-27 by the real Astra: two groups added over Sol 6.2's five, all seven pass at `-O0`/`-O2`. Under manager review.
+3. `next` — **part review: escape**.
 
 ### Carbon (Google)
 
