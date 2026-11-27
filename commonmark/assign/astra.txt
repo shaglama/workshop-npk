@@ -1,3 +1,2 @@
 src/blocks/
 tests/seams/buffer/
-tests/seams/scan/

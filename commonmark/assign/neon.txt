@@ -2,6 +2,5 @@ src/utf8/
 src/references/
 src/html/
 src/escape/
-tests/seams/node/
 tests/seams/blocks/
 tests/seams/inlines/

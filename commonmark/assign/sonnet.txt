@@ -1,0 +1,2 @@
+tests/seams/utf8/
+tests/seams/node/

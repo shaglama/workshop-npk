@@ -1,4 +1,3 @@
 src/buffer/
 src/node/
 src/scan/
-tests/seams/escape/
