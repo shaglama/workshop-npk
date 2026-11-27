@@ -27,6 +27,7 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 
 1. `blocked: manager review` — **node part** (src/node/). Delivered 2026-11-27 (written by Sol 6.1, before the launcher fix) and under manager review — do not rewrite it. Sol 6.2's first session made two small changes over that base (a gated cycle check; custom blocks accepting an allocated `None` node), with added checks — the manager review covers both layers.
 2. `next` — **part review: references**.
+3. `ready` — **seam tests: escape** (tests/seams/escape/), from INTERFACES.md Part 3 alone. The folder starts empty; you write the tests.
 
 ### Astra (OpenAI)
 
@@ -48,7 +49,7 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 
 ### GPT-OSS
 
-1. `next` — **seam tests: escape** (tests/seams/escape/), from INTERFACES.md Part 3 alone. The folder starts empty — you write the test program and harness (see the seam-test rule above); replace the blocked-status NOTES.md from the first attempt with the real notes. **Brief: `briefs/seams-escape.md` — follow it step by step, and imitate the finished example in tests/seams/utf8/.**
+1. `next` — **verification re-run: escape writer harness.** Run `python3 commonmark/src/escape/checks/check.py` from the repository root (the script exists — do not create any files). Record the outcome in `commonmark/tests/seams/escape/NOTES.md`, replacing the blocked-status notes: the commands run, the exit codes, and the PASS/FAIL lines exactly as printed, plus the compiler pin from the log. If the script errors, record the error text verbatim — that is a finding to report, not a blocker.
 
 ### Manager (Muse)
 
@@ -56,7 +57,8 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 - Contract clarification owed: INTERFACES.md Part 2 should pin `utf8_check`'s replacement consumption to cmark's `validate_utf8` (rides with Neon's grouping fix, as a contract-change PR).
 - Driver part last, after html is reviewed; then the step PRs to `main` per step, with the credits table in `commonmark/README.md`.
 - 2026-11-27: **Sonnet** (Claude Sonnet 5.5, Anthropic) and **GPT-OSS** (GPT-OSS 120B, OpenAI) joined via management's launcher on the agy Claude+GPT group. Their sessions stop by themselves at the group's 75 % line, so their queue lines are kept short. Reassignments to seat them: utf8 seam tests Carbon → Sonnet; node seam tests Neon → Sonnet; scan seam tests Astra → Sonnet (via GPT-OSS, see below); escape seam tests Sol → GPT-OSS.
-- 2026-11-27: **GPT-OSS is the smallest model in the rotation** (Randy's assessment: a 120B open model — capable, but not in the Sol/Astra/Claude/Gemini league; its first session waited for seam-test files to be provided instead of writing them). Reserve it for mechanical work where reasoning is not the bottleneck: harness re-runs, table-regeneration checks, example tabulation — the driver step's 652-example run is earmarked for it. It keeps the escape seam tests (the most bounded suite: six functions, byte-level expectations); the scan seam tests moved to Sonnet, whose utf8 seam work landed well.
+- 2026-11-27: **GPT-OSS is the smallest model in the rotation** (Randy's assessment: a 120B open model — capable, but not in the Sol/Astra/Claude/Gemini league; its first session waited for seam-test files to be provided instead of writing them). Reserve it for mechanical work where reasoning is not the bottleneck: harness re-runs, table-regeneration checks, example tabulation — the driver step's 652-example run is earmarked for it. The scan seam tests moved to Sonnet, whose utf8 seam work landed well.
+- 2026-11-27: **GPT-OSS's escape seam line is pulled.** Three attempts (queue line, clarified line, step-by-step brief) all ended in the same blocked note — it cannot get past the idea that a harness must be provided. The escape seam tests return to Sol (the staffing table's original assignment). GPT-OSS takes run-and-report duties only, where everything it needs already exists on disk.
 - 2026-11-27: **launcher fault, fixed by management.** Until now the launcher started Astra without naming its model, so the workshop's Astra sessions actually ran Sol 6.2. The buffer seam tests delivered under Astra's name were therefore written by Sol 6.2 — the buffer part's own author — and the credits will say so; the real Astra (gpt-6.2-astra from now on) has the confirmation-pass line above. Management's note scopes this to the workshop launcher.
 - 2026-11-27: **Sol's launcher entry was likewise hardcoded to 6.1** (Randy, confirmed and fixed the same day): the workshop's Sol sessions so far — buffer, scan, and the node part delivered today — ran Sol 6.1; Sol is 6.2 from now on. The manager reviews of buffer and scan stand as written: they rest on the manager's own re-runs against the contract and cmark, not on who held the pen.
 
