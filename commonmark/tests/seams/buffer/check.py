@@ -16,6 +16,8 @@ CASES = {
     13: "trim spaces and tabs within the chunk's bounds",
     14: "binary append and an owned copy that outlives its base",
     15: "growth across 16,388 bytes using all three append calls",
+    16: "all byte ranges of a base containing whitespace, NUL and UTF-8",
+    17: "large appends after clear and an interior copy that outlives its base",
 }
 
 

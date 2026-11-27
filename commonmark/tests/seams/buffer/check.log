@@ -66,35 +66,39 @@ Ubuntu LLD 20.1.2 (compatible with GNU linkers)
 exit: 0
 
 -O0
-$ pin/npkc commonmark/tests/seams/buffer/buffer_seam.npk -o commonmark/tests/seams/buffer/.build-s9zft0ny/buffer.ll
+$ pin/npkc commonmark/tests/seams/buffer/buffer_seam.npk -o commonmark/tests/seams/buffer/.build-5gwmzkyp/buffer.ll
 exit: 0
-$ opt-20 -O0 -S commonmark/tests/seams/buffer/.build-s9zft0ny/buffer.ll -o commonmark/tests/seams/buffer/.build-s9zft0ny/buffer.opt.ll
+$ opt-20 -O0 -S commonmark/tests/seams/buffer/.build-5gwmzkyp/buffer.ll -o commonmark/tests/seams/buffer/.build-5gwmzkyp/buffer.opt.ll
 exit: 0
-$ llc-20 -O0 -filetype=obj -relocation-model=static commonmark/tests/seams/buffer/.build-s9zft0ny/buffer.opt.ll -o commonmark/tests/seams/buffer/.build-s9zft0ny/buffer.o
+$ llc-20 -O0 -filetype=obj -relocation-model=static commonmark/tests/seams/buffer/.build-5gwmzkyp/buffer.opt.ll -o commonmark/tests/seams/buffer/.build-5gwmzkyp/buffer.o
 exit: 0
-$ ld.lld-20 -static -o commonmark/tests/seams/buffer/.build-s9zft0ny/buffer_seam commonmark/tests/seams/buffer/.build-s9zft0ny/buffer.o pin/npkrt.o
+$ ld.lld-20 -static -o commonmark/tests/seams/buffer/.build-5gwmzkyp/buffer_seam commonmark/tests/seams/buffer/.build-5gwmzkyp/buffer.o pin/npkrt.o
 exit: 0
-$ commonmark/tests/seams/buffer/.build-s9zft0ny/buffer_seam
+$ commonmark/tests/seams/buffer/.build-5gwmzkyp/buffer_seam
 exit: 0
 PASS empty buffers, independent owners, append order, clear and reuse
 PASS byte ranges, empty chunks, equality and copying inside UTF-8
 PASS trim spaces and tabs within the chunk's bounds
 PASS binary append and an owned copy that outlives its base
 PASS growth across 16,388 bytes using all three append calls
+PASS all byte ranges of a base containing whitespace, NUL and UTF-8
+PASS large appends after clear and an interior copy that outlives its base
 
 -O2
-$ pin/npkc commonmark/tests/seams/buffer/buffer_seam.npk -o commonmark/tests/seams/buffer/.build-03boxwia/buffer.ll
+$ pin/npkc commonmark/tests/seams/buffer/buffer_seam.npk -o commonmark/tests/seams/buffer/.build-hjwk1lhq/buffer.ll
 exit: 0
-$ opt-20 -O2 -S commonmark/tests/seams/buffer/.build-03boxwia/buffer.ll -o commonmark/tests/seams/buffer/.build-03boxwia/buffer.opt.ll
+$ opt-20 -O2 -S commonmark/tests/seams/buffer/.build-hjwk1lhq/buffer.ll -o commonmark/tests/seams/buffer/.build-hjwk1lhq/buffer.opt.ll
 exit: 0
-$ llc-20 -O2 -filetype=obj -relocation-model=static commonmark/tests/seams/buffer/.build-03boxwia/buffer.opt.ll -o commonmark/tests/seams/buffer/.build-03boxwia/buffer.o
+$ llc-20 -O2 -filetype=obj -relocation-model=static commonmark/tests/seams/buffer/.build-hjwk1lhq/buffer.opt.ll -o commonmark/tests/seams/buffer/.build-hjwk1lhq/buffer.o
 exit: 0
-$ ld.lld-20 -static -o commonmark/tests/seams/buffer/.build-03boxwia/buffer_seam commonmark/tests/seams/buffer/.build-03boxwia/buffer.o pin/npkrt.o
+$ ld.lld-20 -static -o commonmark/tests/seams/buffer/.build-hjwk1lhq/buffer_seam commonmark/tests/seams/buffer/.build-hjwk1lhq/buffer.o pin/npkrt.o
 exit: 0
-$ commonmark/tests/seams/buffer/.build-03boxwia/buffer_seam
+$ commonmark/tests/seams/buffer/.build-hjwk1lhq/buffer_seam
 exit: 0
 PASS empty buffers, independent owners, append order, clear and reuse
 PASS byte ranges, empty chunks, equality and copying inside UTF-8
 PASS trim spaces and tabs within the chunk's bounds
 PASS binary append and an owned copy that outlives its base
 PASS growth across 16,388 bytes using all three append calls
+PASS all byte ranges of a base containing whitespace, NUL and UTF-8
+PASS large appends after clear and an interior copy that outlives its base

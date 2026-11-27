@@ -1,4 +1,5 @@
-// Written by Astra (OpenAI) from INTERFACES.md Part 1.
+// Original seam by Sol 6.2 (OpenAI), confirmed and extended by Astra (OpenAI).
+// Expected results follow INTERFACES.md Part 1.
 mod:buffer_seam;
 
 use "../../../src/buffer/cm_buffer.npk".*;
@@ -139,12 +140,90 @@ func:check_growth = bool() {
     pass true;
 };
 
+func:check_slice_windows = bool() {
+    // Enumerate every valid range, including empty ranges and splits inside é.
+    string:base = " \tA\0é\t Z";
+    int64:off = 0i64;
+    while (off <= base.len) decreases base.len + 1i64 - off {
+        int64:size = 0i64;
+        while (size <= base.len - off) decreases base.len - off + 1i64 - size {
+            Chunk:c = raw chunk_of(base, off, size);
+            if (c.off != off || c.len != size) { pass false; }
+            string:copy = relay chunk_to_string(base, c);
+            if (copy.len != size) { pass false; }
+            int64:i = 0i64;
+            while (i < size) decreases size - i {
+                if (copy.ptr[i] != base.ptr[off + i]) { pass false; }
+                i = i + 1i64;
+            }
+            if (!(raw chunk_eq(base, c, copy))) { pass false; }
+            if (raw chunk_eq(base, c, "") != (size == 0i64)) { pass false; }
+
+            int64:left = off;
+            int64:right = off + size;
+            while (left < right) decreases right - left {
+                if (base.ptr[left] != 32u8 && base.ptr[left] != 9u8) { break; }
+                left = left + 1i64;
+            }
+            while (left < right) decreases right - left {
+                if (base.ptr[right - 1i64] != 32u8 && base.ptr[right - 1i64] != 9u8) { break; }
+                right = right - 1i64;
+            }
+            Chunk:t = raw chunk_trim(base, c);
+            if (t.len != right - left || t.off < off || t.off > off + size) { pass false; }
+            if (t.len > 0i64 && t.off != left) { pass false; }
+            size = size + 1i64;
+        }
+        off = off + 1i64;
+    }
+    pass true;
+};
+
+func:append_bulk_and_copy = string(Buffer->:out) {
+    string:base = "ab\0Z";
+    int64:doublings = 11i64;
+    while (doublings > 0i64) decreases doublings {
+        base = string_concat(base, base);
+        doublings = doublings - 1i64;
+    }
+    relay buffer_puts(out, base);
+    drop buffer_clear(out);
+    relay buffer_putc(out, 33i64);
+    relay buffer_put(out, base, raw chunk_of(base, 3i64, base.len - 4i64));
+    relay buffer_puts(out, base);
+    pass relay chunk_to_string(base, raw chunk_of(base, 2i64, 4i64));
+};
+
+func:check_bulk_ownership = bool() {
+    Buffer:buf = relay buffer_create();
+    string:copy = relay append_bulk_and_copy(@buf);
+    // Both appends and the interior copy must still be readable after base dies.
+    int64:base_len = 8192i64;
+    int64:whole_at = 1i64 + base_len - 4i64;
+    int64:expected_len = whole_at + base_len;
+    if (raw buffer_len(buf) != expected_len) { pass false; }
+    string:text = raw buffer_detach(move(buf));
+    string:pattern = "ab\0Z";
+    if (text.len != expected_len || text.ptr[0i64] != 33u8) { pass false; }
+    int64:i = 1i64;
+    while (i < text.len) decreases text.len - i {
+        // The first append starts at byte 3. The second restarts at byte 0.
+        int64:source = i - 1i64 + 3i64;
+        if (i >= whole_at) { source = i - whole_at; }
+        if (text.ptr[i] != pattern.ptr[source % 4i64]) { pass false; }
+        i = i + 1i64;
+    }
+    pass raw nstr_eq(copy, "\0Zab");
+};
+
 func:check_all = int32() {
     if (!(relay check_lifecycle())) { pass 11i32; }
     if (!(relay check_chunk_ranges())) { pass 12i32; }
     if (!(relay check_chunk_trim())) { pass 13i32; }
     if (!(relay check_binary_ownership())) { pass 14i32; }
     if (!(relay check_growth())) { pass 15i32; }
+    if (!(relay check_slice_windows())) { pass 16i32; }
+    if (!(relay check_bulk_ownership())) { pass 17i32; }
     pass 0i32;
 };
 
