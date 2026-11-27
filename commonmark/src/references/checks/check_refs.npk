@@ -1,0 +1,558 @@
+// Check harness for Part 6 — cm_refs.
+// Written by Neon (Google).
+//
+// Exercises every function in commonmark/INTERFACES.md Part 6 against
+// CommonMark 0.31.2 spec examples and cmark 0.31.2 reference behaviour.
+
+mod:check_refs;
+
+use "../../buffer/cm_buffer.npk".{
+    Buffer, Chunk, buffer_create, buffer_putc, buffer_puts, buffer_detach,
+    chunk_of, chunk_all
+};
+use "../cm_refs.npk".{
+    RefMap, RefHit, RefParse,
+    refmap_new, refmap_add, refmap_lookup, parse_ref_definition
+};
+
+func:print_line = NIL(string:s) never fails {
+    fd:out = 1i32 =>! fd;
+    Result<int64>:r = write(out, s.ptr, s.len);
+    if (r.is_error) { }
+    pass NIL;
+};
+
+func:mk_repeat = string(int64:byte_val, int64:n) {
+    Buffer:b = relay buffer_create();
+    int64:i = 0i64;
+    while (i < n) decreases n - i {
+        discard(relay buffer_putc(@b, byte_val));
+        i = i + 1i64;
+    }
+    pass (raw buffer_detach(move(b)));
+};
+
+func:mk_bytes = string(fixed int64[]:xs) {
+    Buffer:b = relay buffer_create();
+    for (int64:i in 0i64...xs.len) {
+        discard(relay buffer_putc(@b, xs[i]));
+    }
+    pass (raw buffer_detach(move(b)));
+};
+
+func:expect_hit = bool(RefMap:m, string:lab, string:exp_url, string:exp_title) {
+    RefHit:h = relay refmap_lookup(m, lab, raw chunk_all(lab));
+    pass (h.found && string_equals(h.url, exp_url) && string_equals(h.title, exp_title));
+};
+
+func:expect_miss = bool(RefMap:m, string:lab) {
+    RefHit:h = relay refmap_lookup(m, lab, raw chunk_all(lab));
+    pass (!h.found && string_equals(h.url, "") && string_equals(h.title, ""));
+};
+
+// 1. Empty map & invalid lookup inputs
+func:test_empty = int32() {
+    RefMap:m = relay refmap_new();
+    if (!(relay expect_miss(m, "foo"))) { pass 1i32; }
+    if (!(relay expect_miss(m, ""))) { pass 2i32; }
+    if (!(relay expect_miss(m, "   \t\r\n  "))) { pass 3i32; }
+
+    RefHit:h_neg = relay refmap_lookup(m, "foo", Chunk{ off: 0i64 - 1i64, len: 2i64 });
+    if (h_neg.found) { pass 4i32; }
+    RefHit:h_past = relay refmap_lookup(m, "foo", Chunk{ off: 10i64, len: 2i64 });
+    if (h_past.found) { pass 5i32; }
+
+    string:long1001 = relay mk_repeat(97i64, 1001i64);
+    if (!(relay expect_miss(m, long1001))) { pass 6i32; }
+
+    pass 0i32;
+};
+
+// 2. Normalisation: Unicode case fold, whitespace collapse, NBSP, backslashes
+func:test_normalisation = int32() {
+    RefMap:m = relay refmap_new();
+
+    // ASCII case folding & whitespace collapsing (\t, \r, \n, \v, \f, ' ')
+    string:lab1 = "  Foo \t\r\n  Bar  ";
+    discard(relay refmap_add(@m, lab1, raw chunk_all(lab1), "/url1", raw chunk_all("/url1"), "\"t1\"", raw chunk_all("\"t1\"")));
+    if (!(relay expect_hit(m, "foo bar", "/url1", "t1"))) { pass 10i32; }
+    if (!(relay expect_hit(m, "FOO\n\tBAR", "/url1", "t1"))) { pass 11i32; }
+    if (!(relay expect_hit(m, "   foo   bar   ", "/url1", "t1"))) { pass 12i32; }
+    if (!(relay expect_miss(m, "foobar"))) { pass 13i32; }
+
+    // Unicode case folding: Greek ΑΓΩ -> αγω (spec line 3349)
+    string:greek_u = "ΑΓΩ";
+    string:greek_l = "αγω";
+    discard(relay refmap_add(@m, greek_u, raw chunk_all(greek_u), "/φου", raw chunk_all("/φου"), "", raw chunk_all("")));
+    if (!(relay expect_hit(m, greek_l, "/φου", ""))) { pass 14i32; }
+    if (!(relay expect_hit(m, greek_u, "/φου", ""))) { pass 15i32; }
+
+    // Multi-codepoint Unicode case fold: ẞ (U+1E9E) <-> SS <-> ss <-> ß (spec line 8130)
+    string:sharp_s = "ẞ";
+    discard(relay refmap_add(@m, "SS", raw chunk_all("SS"), "/sharp", raw chunk_all("/sharp"), "", raw chunk_all("")));
+    if (!(relay expect_hit(m, sharp_s, "/sharp", ""))) { pass 16i32; }
+    if (!(relay expect_hit(m, "ß", "/sharp", ""))) { pass 17i32; }
+    if (!(relay expect_hit(m, "ss", "/sharp", ""))) { pass 18i32; }
+
+    // Ligature ﬁ (U+FB01) <-> FI
+    discard(relay refmap_add(@m, "ﬁ", raw chunk_all("ﬁ"), "/lig", raw chunk_all("/lig"), "", raw chunk_all("")));
+    if (!(relay expect_hit(m, "FI", "/lig", ""))) { pass 19i32; }
+
+    // Backslashes in labels are NOT unescaped (spec line 8220)
+    discard(relay refmap_add(@m, "foo!", raw chunk_all("foo!"), "/bang", raw chunk_all("/bang"), "", raw chunk_all("")));
+    if (!(relay expect_hit(m, "foo!", "/bang", ""))) { pass 20i32; }
+    if (!(relay expect_miss(m, "foo\\!"))) { pass 21i32; }
+
+    // NBSP (U+00A0 = 0xC2 0xA0) is NOT ASCII whitespace and does NOT collapse
+    fixed int64[8]:nbsp_bytes = [ 97i64, 194i64, 160i64, 98i64, 32i64, 32i64, 99i64, 0i64 ];
+    string:nbsp_lab = relay mk_bytes(nbsp_bytes[0i64...7i64]);
+    discard(relay refmap_add(@m, nbsp_lab, raw chunk_all(nbsp_lab), "/nbsp", raw chunk_all("/nbsp"), "", raw chunk_all("")));
+    if (!(relay expect_miss(m, "a b c"))) { pass 22i32; }
+    fixed int64[6]:nbsp_q_bytes = [ 65i64, 194i64, 160i64, 66i64, 32i64, 67i64 ];
+    string:nbsp_q = relay mk_bytes(nbsp_q_bytes[0i64...6i64]);
+    if (!(relay expect_hit(m, nbsp_q, "/nbsp", ""))) { pass 23i32; }
+
+    // Empty and whitespace-only labels ignored on add
+    discard(relay refmap_add(@m, "", raw chunk_all(""), "/bad", raw chunk_all("/bad"), "", raw chunk_all("")));
+    discard(relay refmap_add(@m, " \t\n ", raw chunk_all(" \t\n "), "/bad", raw chunk_all("/bad"), "", raw chunk_all("")));
+    if (!(relay expect_miss(m, ""))) { pass 24i32; }
+    if (!(relay expect_miss(m, " "))) { pass 25i32; }
+
+    pass 0i32;
+};
+
+// 3. Cleaning through cm_escape, first-wins, sub-chunks across distinct bases, independent clones
+func:test_cleaning_and_ownership = int32() {
+    RefMap:m = relay refmap_new();
+
+    // Distinct base strings with non-zero chunk offsets
+    string:b_lab = "xx[MyLabel]yy";
+    string:b_url = "___  /f&ouml;\\*&#32;bar  ___";
+    string:b_tit = ">>>\"  hello &amp; \\\"world\\\"  \"<<<";
+
+    Chunk:c_lab = raw chunk_of(b_lab, 3i64, 7i64);     // "MyLabel"
+    Chunk:c_url = raw chunk_of(b_url, 3i64, 22i64);    // "  /f&ouml;\*&#32;bar  "
+    Chunk:c_tit = raw chunk_of(b_tit, 3i64, 27i64);    // "\"  hello &amp; \\\"world\\\"  \""
+
+    discard(relay refmap_add(@m, b_lab, c_lab, b_url, c_url, b_tit, c_tit));
+    if (!(relay expect_hit(m, "mylabel", "/fö* bar", "  hello & \"world\"  "))) { pass 30i32; }
+
+    // First definition wins even when later label has different case & whitespace
+    discard(relay refmap_add(
+        @m,
+        "  MYLABEL\t", raw chunk_all("  MYLABEL\t"),
+        "/second", raw chunk_all("/second"),
+        "'second'", raw chunk_all("'second'")
+    ));
+    if (!(relay expect_hit(m, "mylabel", "/fö* bar", "  hello & \"world\"  "))) { pass 31i32; }
+
+    // Independent owned clones: drop first RefHit, re-query and check bytes intact
+    {
+        RefHit:h1 = relay refmap_lookup(m, "mylabel", raw chunk_all("mylabel"));
+        if (!h1.found || !string_equals(h1.url, "/fö* bar")) { pass 32i32; }
+        string:moved_u = move(h1.url);
+        if (!string_equals(moved_u, "/fö* bar")) { pass 33i32; }
+    }
+    {
+        RefHit:h2 = relay refmap_lookup(m, "MYLABEL", raw chunk_all("MYLABEL"));
+        if (!h2.found || !string_equals(h2.url, "/fö* bar") || !string_equals(h2.title, "  hello & \"world\"  ")) {
+            pass 34i32;
+        }
+    }
+
+    // Empty title vs empty quoted title vs paren title
+    discard(relay refmap_add(@m, "t_empty", raw chunk_all("t_empty"), "/u", raw chunk_all("/u"), "\"\"", raw chunk_all("\"\"")));
+    discard(relay refmap_add(@m, "t_paren", raw chunk_all("t_paren"), "/u", raw chunk_all("/u"), "(a \\(b\\))", raw chunk_all("(a \\(b\\))")));
+    if (!(relay expect_hit(m, "t_empty", "/u", ""))) { pass 35i32; }
+    if (!(relay expect_hit(m, "t_paren", "/u", "a (b)"))) { pass 36i32; }
+
+    pass 0i32;
+};
+
+// 4. Hash table growth / rehash stress (250 distinct entries) & 1000-byte boundary
+func:test_growth_and_bounds = int32() {
+    RefMap:m = relay refmap_new();
+
+    int64:n = 250i64;
+    int64:i = 0i64;
+    while (i < n) decreases n - i {
+        string:num = int_to_string(i);
+        string:lab = string_concat("Key_", num);
+        string:url = string_concat("https://example.com/", num);
+        string:tit = string_concat("\"Title ", string_concat(num, "\""));
+        discard(relay refmap_add(@m, lab, raw chunk_all(lab), url, raw chunk_all(url), tit, raw chunk_all(tit)));
+        i = i + 1i64;
+    }
+
+    int64:j = 0i64;
+    while (j < n) decreases n - j {
+        string:num = int_to_string(j);
+        string:qlab = string_concat("  key_", string_concat(num, "  "));
+        string:eurl = string_concat("https://example.com/", num);
+        string:etit = string_concat("Title ", num);
+        if (!(relay expect_hit(m, qlab, eurl, etit))) { pass 40i32; }
+        j = j + 1i64;
+    }
+    if (!(relay expect_miss(m, "key_250"))) { pass 41i32; }
+    if (!(relay expect_miss(m, "key_999"))) { pass 42i32; }
+
+    // 1000-byte label succeeds; 1001-byte label is ignored and never matches
+    string:k1000 = relay mk_repeat(97i64, 1000i64);
+    string:k1000_up = relay mk_repeat(65i64, 1000i64);
+    string:k1001 = relay mk_repeat(98i64, 1001i64);
+
+    discard(relay refmap_add(@m, k1000, raw chunk_all(k1000), "/1000", raw chunk_all("/1000"), "", raw chunk_all("")));
+    discard(relay refmap_add(@m, k1001, raw chunk_all(k1001), "/1001", raw chunk_all("/1001"), "", raw chunk_all("")));
+
+    if (!(relay expect_hit(m, k1000_up, "/1000", ""))) { pass 43i32; }
+    if (!(relay expect_miss(m, k1001))) { pass 44i32; }
+
+    pass 0i32;
+};
+
+// 5. CommonMark 0.31.2 §4.7 & §6.3 spec examples through parse_ref_definition
+func:test_parse_spec_examples = int32() {
+    // Spec line 3180: [foo]: /url "title"
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "[foo]: /url \"title\"\n";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != s.len) { pass 50i32; }
+        if (!(relay expect_hit(m, "foo", "/url", "title"))) { pass 51i32; }
+    }
+
+    // Spec line 3189: 3 leading spaces, multiline spnl, single-quoted title, trailing spaces
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "   [foo]: \n      /url  \n           'the title'  \n";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != s.len) { pass 52i32; }
+        if (!(relay expect_hit(m, "foo", "/url", "the title"))) { pass 53i32; }
+    }
+
+    // Spec line 3200: [Foo*bar\]]:my_(url) 'title (with parens)'
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "[Foo*bar\\]]:my_(url) 'title (with parens)'";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != s.len) { pass 54i32; }
+        if (!(relay expect_hit(m, "Foo*bar\\]", "my_(url)", "title (with parens)"))) { pass 55i32; }
+    }
+
+    // Spec line 3209: angle-bracketed URL with space
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "[Foo bar]:\n<my url>\n'title'\n";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != s.len) { pass 56i32; }
+        if (!(relay expect_hit(m, "foo bar", "my url", "title"))) { pass 57i32; }
+    }
+
+    // Spec line 3222: multiline title preserves leading/trailing newlines
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "[foo]: /url '\ntitle\nline1\nline2\n'\n";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != s.len) { pass 58i32; }
+        if (!(relay expect_hit(m, "foo", "/url", "\ntitle\nline1\nline2\n"))) { pass 59i32; }
+    }
+
+    // Spec line 3241: title may not contain a blank line
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "[foo]: /url 'title\n\nwith blank line'\n";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != 0i64) { pass 60i32; }
+        if (!(relay expect_miss(m, "foo"))) { pass 61i32; }
+    }
+
+    // Spec line 3256: title omitted
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "[foo]:\n/url\n";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != s.len) { pass 62i32; }
+        if (!(relay expect_hit(m, "foo", "/url", ""))) { pass 63i32; }
+    }
+
+    // Spec line 3268: destination omitted -> invalid
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "[foo]:\n\n[foo]\n";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != 0i64) { pass 64i32; }
+    }
+
+    // Spec line 3280: empty angle-bracketed destination <>
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "[foo]: <>\n";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != s.len) { pass 65i32; }
+        if (!(relay expect_hit(m, "foo", "", ""))) { pass 66i32; }
+    }
+
+    // Spec line 3291: title must be separated from destination by whitespace
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "[foo]: <bar>(baz)\n";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != 0i64) { pass 67i32; }
+    }
+
+    // Spec line 3304: backslash escapes and literal backslashes in dest and title
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "[foo]: /url\\bar\\*baz \"foo\\\"bar\\baz\"\n";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != s.len) { pass 68i32; }
+        if (!(relay expect_hit(m, "foo", "/url\\bar*baz", "foo\"bar\\baz"))) { pass 69i32; }
+    }
+
+    // Spec line 3329: multiple matching definitions -> first wins, both consumed
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "[foo]: first\n[foo]: second\n";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != s.len) { pass 70i32; }
+        if (!(relay expect_hit(m, "foo", "first", ""))) { pass 71i32; }
+    }
+
+    // Spec line 3372: multiline label followed by paragraph line `bar`
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "[\nfoo\n]: /url\nbar\n";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != 14i64) { pass 72i32; }
+        if (!(relay expect_hit(m, "foo", "/url", ""))) { pass 73i32; }
+    }
+
+    // Spec line 3385: trailing non-space after title on same line -> invalid
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "[foo]: /url \"title\" ok\n";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != 0i64) { pass 74i32; }
+        if (!(relay expect_miss(m, "foo"))) { pass 75i32; }
+    }
+
+    // Spec line 3394: title on next line followed by garbage -> rewinds, no title
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "[foo]: /url\n\"title\" ok\n";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != 12i64) { pass 76i32; }
+        if (!(relay expect_hit(m, "foo", "/url", ""))) { pass 77i32; }
+    }
+
+    // Spec line 3405: 4 leading spaces -> not a definition
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "    [foo]: /url \"title\"\n";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != 0i64) { pass 78i32; }
+    }
+
+    // Spec line 3470: def followed by ===
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "[foo]: /url\n===\n";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != 12i64) { pass 79i32; }
+        if (!(relay expect_hit(m, "foo", "/url", ""))) { pass 80i32; }
+    }
+
+    // Spec line 3483: several consecutive definitions without blank lines
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "[foo]: /foo-url \"foo\"\n[bar]: /bar-url\n  \"bar\"\n[baz]: /baz-url\ntrailing\n";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != 62i64) { pass 81i32; }
+        if (!(relay expect_hit(m, "foo", "/foo-url", "foo"))) { pass 82i32; }
+        if (!(relay expect_hit(m, "bar", "/bar-url", "bar"))) { pass 83i32; }
+        if (!(relay expect_hit(m, "baz", "/baz-url", ""))) { pass 84i32; }
+    }
+
+    // Spec lines 8234..8298: label bracket & empty/whitespace rules
+    {
+        RefMap:m = relay refmap_new();
+        string:b1 = "[ref[]: /uri\n";
+        string:b2 = "[ref[bar]]: /uri\n";
+        string:b3 = "[[[foo]]]: /url\n";
+        string:b4 = "[]: /uri\n";
+        string:b5 = "[\n ]: /uri\n";
+        if ((relay parse_ref_definition(@m, b1, raw chunk_all(b1))).consumed != 0i64) { pass 85i32; }
+        if ((relay parse_ref_definition(@m, b2, raw chunk_all(b2))).consumed != 0i64) { pass 86i32; }
+        if ((relay parse_ref_definition(@m, b3, raw chunk_all(b3))).consumed != 0i64) { pass 87i32; }
+        if ((relay parse_ref_definition(@m, b4, raw chunk_all(b4))).consumed != 0i64) { pass 88i32; }
+        if ((relay parse_ref_definition(@m, b5, raw chunk_all(b5))).consumed != 0i64) { pass 89i32; }
+
+        string:g1 = "[ref\\[]: /uri\n[bar\\\\]: /uri2\n";
+        RefParse:pg = relay parse_ref_definition(@m, g1, raw chunk_all(g1));
+        if (pg.consumed != g1.len) { pass 90i32; }
+        if (!(relay expect_hit(m, "ref\\[", "/uri", ""))) { pass 91i32; }
+        if (!(relay expect_hit(m, "bar\\\\", "/uri2", ""))) { pass 92i32; }
+    }
+
+    pass 0i32;
+};
+
+// 6. Edge cases: CRLF/CR, paren titles, URL edge cases, 1000/1001 in parse, sub-chunk isolation
+func:test_parse_edge_cases = int32() {
+    // CRLF and lone CR line endings
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "[a]: /u1 \"t1\"\r\n[b]:\r/u2\r(t2)\r";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != s.len) { pass 100i32; }
+        if (!(relay expect_hit(m, "a", "/u1", "t1"))) { pass 101i32; }
+        if (!(relay expect_hit(m, "b", "/u2", "t2"))) { pass 102i32; }
+    }
+
+    // Leading tab rejected
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "\t[foo]: /url\n";
+        if ((relay parse_ref_definition(@m, s, raw chunk_all(s))).consumed != 0i64) { pass 103i32; }
+    }
+
+    // Blank line stops consecutive definitions
+    {
+        RefMap:m = relay refmap_new();
+        string:s = "[a]: /1\n\n[b]: /2\n";
+        RefParse:p = relay parse_ref_definition(@m, s, raw chunk_all(s));
+        if (p.consumed != 8i64) { pass 104i32; }
+        if (!(relay expect_hit(m, "a", "/1", ""))) { pass 105i32; }
+        if (!(relay expect_miss(m, "b"))) { pass 106i32; }
+    }
+
+    // Angle-bracket URL edge cases
+    {
+        RefMap:m = relay refmap_new();
+        string:u_bad1 = "[a]: <foo\\>\n";
+        string:u_bad2 = "[a]: <foo<bar>\n";
+        string:u_bad3 = "[a]: <foo\nbar>\n";
+        if ((relay parse_ref_definition(@m, u_bad1, raw chunk_all(u_bad1))).consumed != 0i64) { pass 107i32; }
+        if ((relay parse_ref_definition(@m, u_bad2, raw chunk_all(u_bad2))).consumed != 0i64) { pass 108i32; }
+        if ((relay parse_ref_definition(@m, u_bad3, raw chunk_all(u_bad3))).consumed != 0i64) { pass 109i32; }
+
+        string:u_ok = "[a]: <foo\\\\>\n[b]: <foo\\<bar>\n[c]: <foo(bar>\n";
+        RefParse:pu = relay parse_ref_definition(@m, u_ok, raw chunk_all(u_ok));
+        if (pu.consumed != u_ok.len) { pass 110i32; }
+        if (!(relay expect_hit(m, "a", "foo\\", ""))) { pass 111i32; }
+        if (!(relay expect_hit(m, "b", "foo<bar", ""))) { pass 112i32; }
+        if (!(relay expect_hit(m, "c", "foo(bar", ""))) { pass 113i32; }
+    }
+
+    // Bare URL edge cases: unbalanced parens, 32 vs 33 nesting, control bytes
+    {
+        RefMap:m = relay refmap_new();
+        string:p_bad1 = "[a]: foo(bar\n";
+        string:p_bad2 = "[a]: foo)bar\n";
+        if ((relay parse_ref_definition(@m, p_bad1, raw chunk_all(p_bad1))).consumed != 0i64) { pass 114i32; }
+        if ((relay parse_ref_definition(@m, p_bad2, raw chunk_all(p_bad2))).consumed != 0i64) { pass 115i32; }
+
+        string:l32 = relay mk_repeat(40i64, 32i64);
+        string:r32 = relay mk_repeat(41i64, 32i64);
+        string:ok32 = string_concat("[p32]: a", string_concat(l32, string_concat("x", string_concat(r32, "\n"))));
+        if ((relay parse_ref_definition(@m, ok32, raw chunk_all(ok32))).consumed != ok32.len) { pass 116i32; }
+
+        string:l33 = relay mk_repeat(40i64, 33i64);
+        string:r33 = relay mk_repeat(41i64, 33i64);
+        string:bad33 = string_concat("[p33]: a", string_concat(l33, string_concat("x", string_concat(r33, "\n"))));
+        if ((relay parse_ref_definition(@m, bad33, raw chunk_all(bad33))).consumed != 0i64) { pass 117i32; }
+
+        // Control byte 0x01 in bare URL rejected
+        fixed int64[9]:ctrl_u = [ 91i64, 99i64, 93i64, 58i64, 32i64, 97i64, 1i64, 98i64, 10i64 ];
+        string:s_ctrl = relay mk_bytes(ctrl_u[0i64...9i64]);
+        if ((relay parse_ref_definition(@m, s_ctrl, raw chunk_all(s_ctrl))).consumed != 0i64) { pass 118i32; }
+    }
+
+    // 1000-byte vs 1001-byte label in parse_ref_definition
+    {
+        RefMap:m = relay refmap_new();
+        string:k1000 = relay mk_repeat(120i64, 1000i64);
+        string:d1000 = string_concat("[", string_concat(k1000, "]: /ok1000\n"));
+        RefParse:p1 = relay parse_ref_definition(@m, d1000, raw chunk_all(d1000));
+        if (p1.consumed != d1000.len) { pass 119i32; }
+        if (!(relay expect_hit(m, k1000, "/ok1000", ""))) { pass 120i32; }
+
+        string:k1001 = relay mk_repeat(121i64, 1001i64);
+        string:d1001 = string_concat("[", string_concat(k1001, "]: /bad1001\n"));
+        RefParse:p2 = relay parse_ref_definition(@m, d1001, raw chunk_all(d1001));
+        if (p2.consumed != 0i64) { pass 121i32; }
+    }
+
+    // Strict sub-chunk boundary: closing '"' exists in `base` AFTER `c` ends!
+    // parse_ref_definition MUST NOT read past c.off + c.len.
+    {
+        RefMap:m = relay refmap_new();
+        string:base = "XX[foo]: /url \"unterm\"YY";
+        // Chunk covers "[foo]: /url \"unterm" (off=2, len=19); closing '"' at index 21 is outside c!
+        Chunk:sub = raw chunk_of(base, 2i64, 19i64);
+        RefParse:p = relay parse_ref_definition(@m, base, sub);
+        if (p.consumed != 0i64) { pass 122i32; }
+        if (!(relay expect_miss(m, "foo"))) { pass 123i32; }
+
+        // Chunk covers "[foo]: /url \"unterm\"" (off=2, len=20); closing '"' is inside c!
+        Chunk:sub2 = raw chunk_of(base, 2i64, 20i64);
+        RefParse:p2 = relay parse_ref_definition(@m, base, sub2);
+        if (p2.consumed != 20i64) { pass 124i32; }
+        if (!(relay expect_hit(m, "foo", "/url", "unterm"))) { pass 125i32; }
+    }
+
+    // Sub-chunk with next-line title whose closing '"' is outside c -> rewinds to URL-only def
+    {
+        RefMap:m = relay refmap_new();
+        string:base = "[foo]: /url\n\"unterm\"";
+        Chunk:sub = raw chunk_of(base, 0i64, 19i64); // "[foo]: /url\n\"unterm"
+        RefParse:p = relay parse_ref_definition(@m, base, sub);
+        if (p.consumed != 12i64) { pass 126i32; }
+        if (!(relay expect_hit(m, "foo", "/url", ""))) { pass 127i32; }
+    }
+
+    pass 0i32;
+};
+
+func:main = int32(cstring[]:_~argv) {
+    Result<int32>:r1 = test_empty();
+    if (r1.is_error) { exit 199i32; }
+    if (r1.value != 0i32) { exit r1.value; }
+    drop print_line("PASS: refmap_new & empty lookup\n");
+
+    Result<int32>:r2 = test_normalisation();
+    if (r2.is_error) { exit 200i32; }
+    if (r2.value != 0i32) { exit r2.value; }
+    drop print_line("PASS: refmap_add & refmap_lookup normalisation\n");
+
+    Result<int32>:r3 = test_cleaning_and_ownership();
+    if (r3.is_error) { exit 201i32; }
+    if (r3.value != 0i32) { exit r3.value; }
+    drop print_line("PASS: refmap_add cleaning, first-wins & clones\n");
+
+    Result<int32>:r4 = test_growth_and_bounds();
+    if (r4.is_error) { exit 202i32; }
+    if (r4.value != 0i32) { exit r4.value; }
+    drop print_line("PASS: refmap hash growth & 1000-byte boundary\n");
+
+    Result<int32>:r5 = test_parse_spec_examples();
+    if (r5.is_error) { exit 203i32; }
+    if (r5.value != 0i32) { exit r5.value; }
+    drop print_line("PASS: parse_ref_definition spec examples\n");
+
+    Result<int32>:r6 = test_parse_edge_cases();
+    if (r6.is_error) { exit 204i32; }
+    if (r6.value != 0i32) { exit r6.value; }
+    drop print_line("PASS: parse_ref_definition edge cases & sub-chunks\n");
+
+    drop print_line("ALL cm_refs CHECKS PASSED\n");
+    exit 0i32;
+};
+
+func:failsafe = int32(Error:e) {
+    pick (e) {
+        (OutOfBounds, IntOverflow, DivByZero, DivOverflow, DecreasesViolated, LimitViolated,
+         Unreachable, HeapOom, HeapBadRequest, WildLeak, StackExhausted, MachineFault) { exit 90i32; },
+        (*) { exit 99i32; }
+    }
+};

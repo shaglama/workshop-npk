@@ -1,0 +1,632 @@
+// cm_refs — Link reference definitions: label normalisation, store, lookup,
+// and parsing link reference definitions out of block content.
+// Part 6 of the Nitpick port of cmark 0.31.2 (CommonMark -> HTML).
+// Written by Neon (Google).
+//
+// Ported from cmark 0.31.2 (src/references.c, src/references.h, and
+// cmark_parse_reference_inline / link_label / manual_scan_link_url in
+// src/inlines.c), under the BSD-2-Clause notices in ../../LICENSES/COPYING.
+
+mod:cm_refs;
+
+use "../buffer/cm_buffer.npk".{
+    Buffer, Chunk, buffer_create, buffer_put, buffer_putc, buffer_detach, chunk_to_string
+};
+use "../utf8/cm_utf8.npk".{utf8_case_fold};
+use "../scan/cm_scan.npk".{scan_link_title};
+use "../escape/cm_escape.npk".{clean_url, clean_title};
+
+fixed int64:MAX_LINK_LABEL_LENGTH = 1000i64;
+fixed int64:MAX_LINK_URL_PARENS = 32i64;
+
+struct:RefEntry = {
+    string:label;
+    string:url;
+    string:title;
+    uint32:hash;
+};
+
+// Owning, move-only link reference map indexed by normalised label.
+// Open-addressed hash table over `buckets` (-1 = empty, else index in `entries`).
+pub struct:RefMap = {
+    hidden List<RefEntry>:entries;
+    hidden List<int64>:buckets;
+};
+
+// Owning, move-only lookup result. When `found` is true, `url` and `title` are
+// independent owned clones of the stored strings; when false, both are "".
+pub struct:RefHit = {
+    bool:found;
+    string:url;
+    string:title;
+};
+
+// Plain result of parsing one or more link reference definitions at the start
+// of a chunk; `consumed == 0` means no definition matched.
+pub struct:RefParse = {
+    int64:consumed;
+};
+
+struct:LineEndScan = {
+    bool:ok;
+    int64:next_pos;
+};
+
+struct:UrlScan = {
+    bool:ok;
+    int64:consumed;
+    Chunk:url;
+};
+
+// cmark_isspace: ASCII whitespace (' ', '\t', '\n', '\v', '\f', '\r').
+func:is_ascii_space = bool(uint8:b) never fails {
+    pass (b == 32u8 || (b >= 9u8 && b <= 13u8));
+};
+
+// cmark_ispunct: the 32 ASCII punctuation characters.
+func:is_ascii_punct = bool(uint8:b) never fails {
+    pass ((b >= 33u8 && b <= 47u8)
+       || (b >= 58u8 && b <= 64u8)
+       || (b >= 91u8 && b <= 96u8)
+       || (b >= 123u8 && b <= 126u8));
+};
+
+// Byte-for-byte string equality.
+func:str_eq = bool(string:a, string:b) never fails {
+    if (a.len != b.len) {
+        pass false;
+    }
+    fixed uint8[]:ab = string_bytes(a);
+    fixed uint8[]:bb = string_bytes(b);
+    int64:i = 0i64;
+    while (i < a.len) decreases a.len - i {
+        if (ab[i] != bb[i]) {
+            pass false;
+        }
+        i = i + 1i64;
+    }
+    pass true;
+};
+
+// 32-bit FNV-1a over raw bytes, computed in uint64 to stay overflow-free.
+func:hash_label = uint32(string:s) never fails {
+    fixed uint8[]:bs = string_bytes(s);
+    uint64:h = 2166136261u64;
+    int64:i = 0i64;
+    while (i < s.len) decreases s.len - i {
+        h = (h ^ (bs[i] => uint64)) * 16777619u64;
+        h = (h =>! uint32) => uint64;
+        i = i + 1i64;
+    }
+    pass (h =>! uint32);
+};
+
+// Normalise a link label: reject empty or > 1000 byte labels, apply Unicode
+// full case folding via cm_utf8.utf8_case_fold, strip leading/trailing ASCII
+// whitespace, and collapse consecutive internal ASCII whitespace to a single
+// space (0x20). Returns "" if the label is invalid or whitespace-only.
+func:normalize_label = string(string:base, Chunk:label) {
+    if (label.off < 0i64 || label.len <= 0i64 || label.off >= base.len) {
+        pass "";
+    }
+    int64:len = label.len;
+    int64:avail = base.len - label.off;
+    if (avail < len) {
+        len = avail;
+    }
+    if (len <= 0i64 || len > MAX_LINK_LABEL_LENGTH) {
+        pass "";
+    }
+
+    Buffer:folded_buf = relay buffer_create();
+    Chunk:clamped = Chunk{ off: label.off, len: len };
+    discard(relay utf8_case_fold(base, clamped, @folded_buf));
+    string:folded = raw buffer_detach(move(folded_buf));
+
+    fixed uint8[]:bs = string_bytes(folded);
+    int64:lo = 0i64;
+    int64:hi = folded.len;
+    while (lo < hi) decreases hi - lo {
+        if (!(raw is_ascii_space(bs[lo]))) { break; }
+        lo = lo + 1i64;
+    }
+    while (hi > lo) decreases hi - lo {
+        if (!(raw is_ascii_space(bs[hi - 1i64]))) { break; }
+        hi = hi - 1i64;
+    }
+    if (lo >= hi) {
+        pass "";
+    }
+
+    Buffer:out_buf = relay buffer_create();
+    int64:i = lo;
+    while (i < hi) decreases hi - i {
+        if (raw is_ascii_space(bs[i])) {
+            discard(relay buffer_putc(@out_buf, 32i64));
+            i = i + 1i64;
+            while (i < hi) decreases hi - i {
+                if (!(raw is_ascii_space(bs[i]))) { break; }
+                i = i + 1i64;
+            }
+        } else {
+            int64:run_start = i;
+            i = i + 1i64;
+            while (i < hi) decreases hi - i {
+                if (raw is_ascii_space(bs[i])) { break; }
+                i = i + 1i64;
+            }
+            Chunk:run = Chunk{ off: run_start, len: i - run_start };
+            discard(relay buffer_put(@out_buf, folded, run));
+        }
+    }
+    pass (raw buffer_detach(move(out_buf)));
+};
+
+// Look up normalised label `norm` with hash `h` in (`entries`, `buckets`).
+// Returns entry index in [0, entries.count), or -1 if absent.
+func:find_entry = int64(List<RefEntry>:entries, List<int64>:buckets, string:norm, uint32:h) never fails {
+    int64:cap = buckets.count;
+    if (cap <= 0i64) {
+        pass (0i64 - 1i64);
+    }
+    uint64:mask = (cap - 1i64) =>! uint64;
+    int64:slot = ((h => uint64) & mask) =>! int64;
+    int64:steps = 0i64;
+    while (steps < cap) decreases cap - steps {
+        int64:idx = buckets[slot];
+        if (idx < 0i64) {
+            pass (0i64 - 1i64);
+        }
+        if (entries[idx].hash == h && (raw str_eq(entries[idx].label, norm))) {
+            pass idx;
+        }
+        slot = slot + 1i64;
+        if (slot == cap) {
+            slot = 0i64;
+        }
+        steps = steps + 1i64;
+    }
+    pass (0i64 - 1i64);
+};
+
+// Rebuild the open-addressed bucket table at power-of-two capacity `new_cap`.
+func:rehash_map = NIL(RefMap->:m, int64:new_cap) {
+    List<int64>:nb = relay list_init::<int64>(new_cap);
+    int64:i = 0i64;
+    while (i < new_cap) decreases new_cap - i {
+        drop list_push(@nb, 0i64 - 1i64);
+        i = i + 1i64;
+    }
+
+    uint64:mask = (new_cap - 1i64) =>! uint64;
+    int64:n = m.entries.count;
+    int64:e = 0i64;
+    while (e < n) decreases n - e {
+        int64:slot = ((m.entries[e].hash => uint64) & mask) =>! int64;
+        int64:steps = 0i64;
+        while (steps < new_cap) decreases new_cap - steps {
+            if (nb[slot] < 0i64) {
+                nb[slot] = e;
+                break;
+            }
+            slot = slot + 1i64;
+            if (slot == new_cap) {
+                slot = 0i64;
+            }
+            steps = steps + 1i64;
+        }
+        e = e + 1i64;
+    }
+    m.buckets = move(nb);
+    pass NIL;
+};
+
+// Create an empty reference map.
+pub func:refmap_new = RefMap() {
+    List<RefEntry>:es = relay list_init::<RefEntry>(0i64);
+    List<int64>:bs = relay list_init::<int64>(0i64);
+    pass RefMap{ entries: move(es), buckets: move(bs) };
+};
+
+// Add a link reference definition to `m`.
+// Normalises `label` (case-fold + whitespace collapse, <= 1000 bytes), cleans
+// `url` via cm_escape.clean_url and `title` via cm_escape.clean_title.
+// The first definition of a normalised label wins; later ones are cleaned and
+// dropped. Empty, whitespace-only, or > 1000 byte labels are ignored.
+pub func:refmap_add = NIL(
+    RefMap->:m,
+    string:base, Chunk:label,
+    string:raw_url_base, Chunk:url,
+    string:raw_title_base, Chunk:title
+) {
+    string:norm = relay normalize_label(base, label);
+    if (norm.len == 0i64) {
+        pass NIL;
+    }
+
+    string:cleaned_url = relay clean_url(raw_url_base, url);
+    string:cleaned_title = relay clean_title(raw_title_base, title);
+
+    uint32:h = raw hash_label(norm);
+    int64:existing = raw find_entry(m.entries, m.buckets, norm, h);
+    if (existing >= 0i64) {
+        // First definition wins; cleaned_url and cleaned_title drop on exit.
+        pass NIL;
+    }
+
+    int64:bcap = m.buckets.count;
+    if (bcap == 0i64 || ((m.entries.count + 1i64) * 2i64) > bcap) {
+        int64:new_cap = 16i64;
+        if (bcap >= 16i64) {
+            new_cap = bcap * 2i64;
+        }
+        discard(relay rehash_map(m, new_cap));
+    }
+
+    int64:new_idx = m.entries.count;
+    RefEntry:entry = RefEntry{
+        label: move(norm),
+        url: move(cleaned_url),
+        title: move(cleaned_title),
+        hash: h
+    };
+    drop list_push(@m.entries, move(entry));
+
+    int64:cap = m.buckets.count;
+    uint64:mask = (cap - 1i64) =>! uint64;
+    int64:slot = ((h => uint64) & mask) =>! int64;
+    int64:steps = 0i64;
+    while (steps < cap) decreases cap - steps {
+        if (m.buckets[slot] < 0i64) {
+            m.buckets[slot] = new_idx;
+            break;
+        }
+        slot = slot + 1i64;
+        if (slot == cap) {
+            slot = 0i64;
+        }
+        steps = steps + 1i64;
+    }
+    pass NIL;
+};
+
+// Look up `label` in `m`. Returns independent owned clones of the stored URL
+// and title when found, or { found: false, url: "", title: "" } otherwise.
+pub func:refmap_lookup = RefHit(RefMap:m, string:base, Chunk:label) {
+    if (label.off < 0i64 || label.len <= 0i64 || label.off >= base.len) {
+        pass RefHit{ found: false, url: "", title: "" };
+    }
+    int64:len = label.len;
+    int64:avail = base.len - label.off;
+    if (avail < len) {
+        len = avail;
+    }
+    if (len <= 0i64 || len > MAX_LINK_LABEL_LENGTH || m.entries.count == 0i64) {
+        pass RefHit{ found: false, url: "", title: "" };
+    }
+
+    string:norm = relay normalize_label(base, label);
+    if (norm.len == 0i64) {
+        pass RefHit{ found: false, url: "", title: "" };
+    }
+
+    uint32:h = raw hash_label(norm);
+    int64:idx = raw find_entry(m.entries, m.buckets, norm, h);
+    if (idx < 0i64) {
+        pass RefHit{ found: false, url: "", title: "" };
+    }
+
+    string:u = relay m.entries[idx].url.clone();
+    string:t = relay m.entries[idx].title.clone();
+    pass RefHit{ found: true, url: move(u), title: move(t) };
+};
+
+// Skip horizontal ASCII spaces and tabs (' ' and '\t') within [pos, stop).
+func:skip_spaces = int64(string:base, int64:pos, int64:stop) never fails {
+    fixed uint8[]:bs = string_bytes(base);
+    int64:i = pos;
+    while (i < stop) decreases stop - i {
+        uint8:b = bs[i];
+        if (b != 32u8 && b != 9u8) { break; }
+        i = i + 1i64;
+    }
+    pass i;
+};
+
+// Skip spaces/tabs, optionally up to one line ending (\r\n, \n, or \r), and
+// any following spaces/tabs (matching cmark's spnl).
+func:skip_spnl = int64(string:base, int64:pos, int64:stop) never fails {
+    int64:i = raw skip_spaces(base, pos, stop);
+    if (i < stop) {
+        fixed uint8[]:bs = string_bytes(base);
+        bool:saw_eol = false;
+        if (bs[i] == 13u8) {
+            i = i + 1i64;
+            saw_eol = true;
+        }
+        if (i < stop && bs[i] == 10u8) {
+            i = i + 1i64;
+            saw_eol = true;
+        }
+        if (saw_eol) {
+            i = raw skip_spaces(base, i, stop);
+        }
+    }
+    pass i;
+};
+
+// Consume a line ending (\r\n, \n, or \r) or accept end-of-chunk (EOF).
+func:skip_line_end_or_eof = LineEndScan(string:base, int64:pos, int64:stop) never fails {
+    if (pos >= stop) {
+        pass LineEndScan{ ok: true, next_pos: stop };
+    }
+    fixed uint8[]:bs = string_bytes(base);
+    uint8:b = bs[pos];
+    if (b == 13u8) {
+        int64:next = pos + 1i64;
+        if (next < stop && bs[next] == 10u8) {
+            next = next + 1i64;
+        }
+        pass LineEndScan{ ok: true, next_pos: next };
+    }
+    if (b == 10u8) {
+        pass LineEndScan{ ok: true, next_pos: pos + 1i64 };
+    }
+    pass LineEndScan{ ok: false, next_pos: pos };
+};
+
+// Return true if base[off .. off + len) contains a blank line (a line ending
+// followed by optional spaces/tabs and another line ending).
+func:has_blank_line = bool(string:base, int64:off, int64:len) never fails {
+    fixed uint8[]:bs = string_bytes(base);
+    int64:stop = off + len;
+    int64:i = off;
+    while (i < stop) decreases stop - i {
+        uint8:b = bs[i];
+        if (b == 10u8 || b == 13u8) {
+            if (b == 13u8 && (i + 1i64) < stop && bs[i + 1i64] == 10u8) {
+                i = i + 2i64;
+            } else {
+                i = i + 1i64;
+            }
+            while (i < stop) decreases stop - i {
+                uint8:ws = bs[i];
+                if (ws != 32u8 && ws != 9u8) { break; }
+                i = i + 1i64;
+            }
+            if (i < stop && (bs[i] == 10u8 || bs[i] == 13u8)) {
+                pass true;
+            }
+        } else {
+            i = i + 1i64;
+        }
+    }
+    pass false;
+};
+
+// Scan a CommonMark link destination at `pos` within [pos, stop), matching
+// cmark 0.31.2's manual_scan_link_url / manual_scan_link_url_2.
+func:scan_link_url = UrlScan(string:base, int64:pos, int64:stop) never fails {
+    Chunk:empty = Chunk{ off: 0i64, len: 0i64 };
+    if (pos >= stop) {
+        pass UrlScan{ ok: false, consumed: 0i64, url: empty };
+    }
+    fixed uint8[]:bs = string_bytes(base);
+
+    // Pointy-bracketed destination: <...>
+    if (bs[pos] == 60u8) {
+        int64:i = pos + 1i64;
+        while (i < stop) decreases stop - i {
+            uint8:b = bs[i];
+            if (b == 62u8) {
+                Chunk:inner = Chunk{ off: pos + 1i64, len: i - (pos + 1i64) };
+                pass UrlScan{ ok: true, consumed: (i + 1i64) - pos, url: inner };
+            }
+            if (b == 92u8) {
+                i = i + 1i64;
+                if (i < stop && (raw is_ascii_punct(bs[i]))) {
+                    i = i + 1i64;
+                }
+            } else if (b == 10u8 || b == 13u8 || b == 60u8 || b == 0u8) {
+                pass UrlScan{ ok: false, consumed: 0i64, url: empty };
+            } else {
+                i = i + 1i64;
+            }
+        }
+        pass UrlScan{ ok: false, consumed: 0i64, url: empty };
+    }
+
+    // Bare (unbracketed) destination: nonempty, no spaces/ASCII controls,
+    // balanced unescaped parentheses up to MAX_LINK_URL_PARENS levels deep.
+    int64:i = pos;
+    int64:nb_p = 0i64;
+    while (i < stop) decreases stop - i {
+        uint8:b = bs[i];
+        if (b == 92u8) {
+            if ((i + 1i64) < stop && (raw is_ascii_punct(bs[i + 1i64]))) {
+                i = i + 2i64;
+            } else {
+                i = i + 1i64;
+            }
+        } else if (b == 40u8) {
+            nb_p = nb_p + 1i64;
+            if (nb_p > MAX_LINK_URL_PARENS) {
+                pass UrlScan{ ok: false, consumed: 0i64, url: empty };
+            }
+            i = i + 1i64;
+        } else if (b == 41u8) {
+            if (nb_p == 0i64) {
+                break;
+            }
+            nb_p = nb_p - 1i64;
+            i = i + 1i64;
+        } else if (b == 32u8 || b == 9u8 || b == 10u8 || b == 13u8) {
+            break;
+        } else if (b < 32u8 || b == 127u8) {
+            pass UrlScan{ ok: false, consumed: 0i64, url: empty };
+        } else {
+            i = i + 1i64;
+        }
+    }
+
+    if (i == pos || nb_p != 0i64) {
+        pass UrlScan{ ok: false, consumed: 0i64, url: empty };
+    }
+    Chunk:dest = Chunk{ off: pos, len: i - pos };
+    pass UrlScan{ ok: true, consumed: i - pos, url: dest };
+};
+
+// Parse a single link reference definition starting at `start` within [start, stop).
+// If valid, adds it to `m` and returns the bytes consumed (> 0); otherwise 0.
+func:parse_one_ref_def = int64(RefMap->:m, string:base, int64:start, int64:stop) {
+    fixed uint8[]:bs = string_bytes(base);
+    int64:pos = start;
+
+    // Optional up to 3 leading ASCII spaces (spec §4.7).
+    int64:indent = 0i64;
+    while (pos < stop && indent < 3i64 && bs[pos] == 32u8) decreases 3i64 - indent {
+        pos = pos + 1i64;
+        indent = indent + 1i64;
+    }
+
+    // Link label: '[' ... ']' (at most 1000 bytes, no unescaped '[' or ']',
+    // no NUL, no blank line, at least one non-whitespace byte).
+    if (pos >= stop || bs[pos] != 91u8) {
+        pass 0i64;
+    }
+    pos = pos + 1i64;
+    int64:lab_start = pos;
+    int64:lab_len = 0i64;
+    while (pos < stop) decreases stop - pos {
+        uint8:b = bs[pos];
+        if (b == 0u8 || b == 91u8 || b == 93u8) { break; }
+        if (b == 92u8) {
+            pos = pos + 1i64;
+            lab_len = lab_len + 1i64;
+            if (pos < stop && (raw is_ascii_punct(bs[pos]))) {
+                pos = pos + 1i64;
+                lab_len = lab_len + 1i64;
+            }
+        } else {
+            pos = pos + 1i64;
+            lab_len = lab_len + 1i64;
+        }
+        if (lab_len > MAX_LINK_LABEL_LENGTH) {
+            pass 0i64;
+        }
+    }
+    if (pos >= stop || bs[pos] != 93u8) {
+        pass 0i64;
+    }
+    int64:lab_end = pos;
+    pos = pos + 1i64;
+
+    if (raw has_blank_line(base, lab_start, lab_end - lab_start)) {
+        pass 0i64;
+    }
+
+    // Trim ASCII whitespace to ensure at least one non-whitespace byte.
+    int64:lab_lo = lab_start;
+    int64:lab_hi = lab_end;
+    while (lab_lo < lab_hi) decreases lab_hi - lab_lo {
+        if (!(raw is_ascii_space(bs[lab_lo]))) { break; }
+        lab_lo = lab_lo + 1i64;
+    }
+    while (lab_hi > lab_lo) decreases lab_hi - lab_lo {
+        if (!(raw is_ascii_space(bs[lab_hi - 1i64]))) { break; }
+        lab_hi = lab_hi - 1i64;
+    }
+    if (lab_lo >= lab_hi) {
+        pass 0i64;
+    }
+    Chunk:lab_chunk = Chunk{ off: lab_lo, len: lab_hi - lab_lo };
+
+    // Colon ':'
+    if (pos >= stop || bs[pos] != 58u8) {
+        pass 0i64;
+    }
+    pos = pos + 1i64;
+
+    // Optional spaces/tabs + up to one line ending, then link destination.
+    pos = raw skip_spnl(base, pos, stop);
+    UrlScan:url_res = raw scan_link_url(base, pos, stop);
+    if (!url_res.ok) {
+        pass 0i64;
+    }
+    pos = pos + url_res.consumed;
+
+    // Optional link title (must be separated from destination by whitespace).
+    int64:before_title = pos;
+    pos = raw skip_spnl(base, pos, stop);
+    int64:title_len = 0i64;
+    Chunk:title_chunk = Chunk{ off: 0i64, len: 0i64 };
+
+    if (pos > before_title && pos < stop) {
+        if (stop == base.len) {
+            title_len = raw scan_link_title(base, pos);
+        } else {
+            Chunk:rem_c = Chunk{ off: pos, len: stop - pos };
+            string:rem_s = relay chunk_to_string(base, rem_c);
+            title_len = raw scan_link_title(rem_s, 0i64);
+        }
+        if (title_len > 0i64) {
+            if (raw has_blank_line(base, pos, title_len)) {
+                title_len = 0i64;
+                pos = before_title;
+            } else {
+                title_chunk = Chunk{ off: pos, len: title_len };
+                pos = pos + title_len;
+            }
+        } else {
+            pos = before_title;
+        }
+    } else {
+        pos = before_title;
+    }
+
+    // Trailing spaces/tabs and line ending (or end of chunk).
+    pos = raw skip_spaces(base, pos, stop);
+    LineEndScan:eol = raw skip_line_end_or_eof(base, pos, stop);
+    if (!eol.ok) {
+        if (title_len > 0i64) {
+            // Rewind before title: if destination was followed by a line ending,
+            // the definition succeeds without a title (CommonMark spec §4.7).
+            int64:after_url = raw skip_spaces(base, before_title, stop);
+            LineEndScan:eol2 = raw skip_line_end_or_eof(base, after_url, stop);
+            if (!eol2.ok) {
+                pass 0i64;
+            }
+            pos = eol2.next_pos;
+            title_chunk = Chunk{ off: 0i64, len: 0i64 };
+        } else {
+            pass 0i64;
+        }
+    } else {
+        pos = eol.next_pos;
+    }
+
+    discard(relay refmap_add(m, base, lab_chunk, base, url_res.url, base, title_chunk));
+    pass (pos - start);
+};
+
+// Parse one or more link reference definitions at the start of chunk `c` of
+// `base`, adding each to `m` and returning the total bytes consumed (0 if none).
+pub func:parse_ref_definition = RefParse(RefMap->:m, string:base, Chunk:c) {
+    if (c.off < 0i64 || c.len <= 0i64 || c.off >= base.len) {
+        pass RefParse{ consumed: 0i64 };
+    }
+    int64:len = c.len;
+    int64:avail = base.len - c.off;
+    if (avail < len) {
+        len = avail;
+    }
+    int64:stop = c.off + len;
+
+    int64:cur = c.off;
+    while (cur < stop) decreases stop - cur {
+        int64:step = relay parse_one_ref_def(m, base, cur, stop);
+        if (step <= 0i64) { break; }
+        cur = cur + step;
+    }
+    pass RefParse{ consumed: cur - c.off };
+};
