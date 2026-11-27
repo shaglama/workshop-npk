@@ -1,0 +1,333 @@
+// Written by Sol (OpenAI).
+// Part 5 of the Nitpick port of cmark 0.31.2, node.c/h and iterator.c.
+// John MacFarlane and contributors; BSD-2-Clause: ../../LICENSES/COPYING.
+mod:cm_node;
+
+use "../buffer/cm_buffer.npk".{Chunk};
+use "../references/cm_refs.npk".{RefMap, RefHit, refmap_new, refmap_lookup};
+
+// NodeRef in the contract is int64 (Nitpick has no type-alias declaration).
+pub fixed int64:NO_NODE = 0i64 - 1i64;
+pub enum:NodeKind = {
+    None; DocumentNode; BlockQuote; List; Item; CodeBlock; HtmlBlock; CustomBlock;
+    Paragraph; Heading; ThematicBreak; Text; Softbreak; Linebreak; Code;
+    HtmlInline; CustomInline; Emph; Strong; Link; Image;
+};
+pub enum:ListType = { Bullet; Ordered; };
+pub struct:ListData = {
+    int64:start; ListType:list_type; int64:delimiter; int64:bullet;
+    int64:marker_offset; int64:padding; bool:tight;
+};
+pub struct:CodeData = {
+    string:info; int64:fence_length; int64:fence_offset; int64:fence_char; bool:fenced;
+};
+pub struct:HeadingData = { int64:level; bool:setext; };
+pub struct:LinkData = { string:url; string:title; };
+pub struct:CustomData = { string:on_enter; string:on_exit; };
+pub struct:NodeInfo = {
+    NodeKind:kind;
+    int64:parent; int64:first_child; int64:last_child; int64:next; int64:prev;
+    int64:start_line; int64:start_column; int64:end_line; int64:end_column;
+    ListData:list;
+    int64:fence_length; int64:fence_offset; int64:fence_char; bool:fenced;
+    HeadingData:heading; int64:html_block_type;
+    bool:open; bool:last_line_blank; bool:last_line_checked;
+};
+struct:Node = {
+    NodeInfo:info;
+    string:literal; string:code_info; string:url; string:title;
+    string:on_enter; string:on_exit;
+};
+pub struct:Document = {
+    hidden List<Node>:nodes;
+    hidden int64:root;
+    hidden RefMap:refs;
+};
+pub enum:Event = { Enter; Exit; Done; };
+pub struct:Step = { Event:event; int64:node; };
+pub struct:Iter = {
+    int64:root; int64:current;
+    hidden Event:event; hidden bool:started;
+};
+
+func:empty_info = NodeInfo(NodeKind:kind) never fails {
+    int64:level = 0i64;
+    if (kind == NodeKind.Heading) { level = 1i64; }
+    pass NodeInfo{
+        kind: kind, parent: NO_NODE, first_child: NO_NODE, last_child: NO_NODE,
+        next: NO_NODE, prev: NO_NODE,
+        start_line: 0i64, start_column: 0i64, end_line: 0i64, end_column: 0i64,
+        list: ListData{ start: 0i64, list_type: ListType.Bullet, delimiter: 0i64,
+            bullet: 0i64, marker_offset: 0i64, padding: 0i64, tight: false },
+        fence_length: 0i64, fence_offset: 0i64, fence_char: 0i64, fenced: false,
+        heading: HeadingData{ level: level, setext: false }, html_block_type: 0i64,
+        open: false, last_line_blank: false, last_line_checked: false
+    };
+};
+func:valid = bool(Document:doc, int64:n) never fails {
+    pass (n >= 0i64 && n < doc.nodes.count);
+};
+pub func:doc_new = Document() {
+    List<Node>:nodes = relay list_init::<Node>(0i64);
+    RefMap:refs = relay refmap_new();
+    pass Document{ nodes: move(nodes), root: NO_NODE, refs: move(refs) };
+};
+pub func:doc_set_refs = NIL(Document->:doc, move RefMap:m) never fails {
+    doc.refs = move(m);
+    pass NIL;
+};
+pub func:doc_root = int64(Document:doc) never fails { pass doc.root; };
+pub func:node_new = int64(Document->:doc, NodeKind:kind) never fails {
+    int64:n = doc.nodes.count;
+    Node:entry = Node{ info: raw empty_info(kind), literal: "", code_info: "",
+        url: "", title: "", on_enter: "", on_exit: "" };
+    drop list_push(@doc.nodes, move(entry));
+    // doc_new is empty; the first DocumentNode establishes its root.
+    if (kind == NodeKind.DocumentNode && doc.root == NO_NODE) { doc.root = n; }
+    pass n;
+};
+pub func:node_info = NodeInfo(Document:doc, int64:n) never fails {
+    if (!(raw valid(doc, n))) { pass (raw empty_info(NodeKind.None)); }
+    pass doc.nodes[n].info;
+};
+pub func:node_literal = string(Document:doc, int64:n) {
+    pass (relay doc.nodes[n].literal.clone());
+};
+pub func:node_set_literal = NIL(Document->:doc, int64:n, move string:s) never fails {
+    doc.nodes[n].literal = move(s); pass NIL;
+};
+pub func:node_code_info = string(Document:doc, int64:n) {
+    pass (relay doc.nodes[n].code_info.clone());
+};
+pub func:node_set_code_info = NIL(Document->:doc, int64:n, move string:s) never fails {
+    doc.nodes[n].code_info = move(s); pass NIL;
+};
+pub func:node_link_url = string(Document:doc, int64:n) {
+    pass (relay doc.nodes[n].url.clone());
+};
+pub func:node_link_title = string(Document:doc, int64:n) {
+    pass (relay doc.nodes[n].title.clone());
+};
+pub func:node_set_link = NIL(Document->:doc, int64:n, move string:url, move string:title) never fails {
+    doc.nodes[n].url = move(url); doc.nodes[n].title = move(title); pass NIL;
+};
+pub func:node_custom_on_enter = string(Document:doc, int64:n) {
+    pass (relay doc.nodes[n].on_enter.clone());
+};
+pub func:node_custom_on_exit = string(Document:doc, int64:n) {
+    pass (relay doc.nodes[n].on_exit.clone());
+};
+pub func:node_set_custom = NIL(Document->:doc, int64:n, move string:on_enter, move string:on_exit) never fails {
+    doc.nodes[n].on_enter = move(on_enter); doc.nodes[n].on_exit = move(on_exit); pass NIL;
+};
+pub func:node_set_list = NIL(Document->:doc, int64:n, ListData:d) never fails {
+    doc.nodes[n].info.list = d; pass NIL;
+};
+pub func:node_set_code_fence = NIL(Document->:doc, int64:n, int64:fence_length,
+    int64:fence_offset, int64:fence_char, bool:fenced) never fails {
+    doc.nodes[n].info.fence_length = fence_length;
+    doc.nodes[n].info.fence_offset = fence_offset;
+    doc.nodes[n].info.fence_char = fence_char;
+    doc.nodes[n].info.fenced = fenced; pass NIL;
+};
+pub func:node_set_heading = NIL(Document->:doc, int64:n, HeadingData:d) never fails {
+    doc.nodes[n].info.heading = d; pass NIL;
+};
+pub func:node_set_html_block_type = NIL(Document->:doc, int64:n, int64:t) never fails {
+    doc.nodes[n].info.html_block_type = t; pass NIL;
+};
+pub func:node_set_sourcepos = NIL(Document->:doc, int64:n, int64:start_line,
+    int64:start_column, int64:end_line, int64:end_column) never fails {
+    doc.nodes[n].info.start_line = start_line; doc.nodes[n].info.start_column = start_column;
+    doc.nodes[n].info.end_line = end_line; doc.nodes[n].info.end_column = end_column;
+    pass NIL;
+};
+pub func:node_set_flags = NIL(Document->:doc, int64:n, bool:open,
+    bool:last_line_blank, bool:last_line_checked) never fails {
+    doc.nodes[n].info.open = open; doc.nodes[n].info.last_line_blank = last_line_blank;
+    doc.nodes[n].info.last_line_checked = last_line_checked; pass NIL;
+};
+pub func:doc_ref_lookup = RefHit(Document:doc, string:base, Chunk:label) {
+    pass (relay refmap_lookup(doc.refs, base, label));
+};
+
+// cmark's containment checks, including ancestor rejection before any unlink.
+// Invalid surgery is a no-op: the port's NIL signature has no status result.
+func:can_contain = bool(Document:doc, int64:parent, int64:child) never fails {
+    if (!(raw valid(doc, parent)) || !(raw valid(doc, child)) || parent == child) { pass false; }
+    int64:ancestor = parent;
+    int64:left = doc.nodes.count;
+    while (ancestor != NO_NODE && left > 0i64) decreases left {
+        if (ancestor == child) { pass false; }
+        ancestor = doc.nodes[ancestor].info.parent;
+        left = left - 1i64;
+    }
+    NodeKind:p = doc.nodes[parent].info.kind;
+    NodeKind:c = doc.nodes[child].info.kind;
+    if (c == NodeKind.DocumentNode || c == NodeKind.None) { pass false; }
+    bool:block = (c =>! int32) >= (NodeKind.DocumentNode =>! int32)
+        && (c =>! int32) <= (NodeKind.ThematicBreak =>! int32);
+    bool:inl = (c =>! int32) >= (NodeKind.Text =>! int32)
+        && (c =>! int32) <= (NodeKind.Image =>! int32);
+    pick (p) {
+        (NodeKind.DocumentNode, NodeKind.BlockQuote, NodeKind.Item) { pass (block && c != NodeKind.Item); },
+        (NodeKind.List) { pass (c == NodeKind.Item); },
+        (NodeKind.CustomBlock) { pass true; },
+        (NodeKind.Paragraph, NodeKind.Heading, NodeKind.Emph, NodeKind.Strong,
+         NodeKind.Link, NodeKind.Image, NodeKind.CustomInline) { pass inl; },
+        (*) { pass false; }
+    }
+};
+pub func:node_unlink = NIL(Document->:doc, int64:n) never fails {
+    if (!(raw valid(<-doc, n))) { pass NIL; }
+    NodeInfo:i = doc.nodes[n].info;
+    if (i.prev != NO_NODE) { doc.nodes[i.prev].info.next = i.next; }
+    if (i.next != NO_NODE) { doc.nodes[i.next].info.prev = i.prev; }
+    if (i.parent != NO_NODE) {
+        if (doc.nodes[i.parent].info.first_child == n) { doc.nodes[i.parent].info.first_child = i.next; }
+        if (doc.nodes[i.parent].info.last_child == n) { doc.nodes[i.parent].info.last_child = i.prev; }
+    }
+    doc.nodes[n].info.parent = NO_NODE; doc.nodes[n].info.prev = NO_NODE;
+    doc.nodes[n].info.next = NO_NODE; pass NIL;
+};
+pub func:node_append_child = NIL(Document->:doc, int64:parent, int64:child) never fails {
+    if (!(raw can_contain(<-doc, parent, child))) { pass NIL; }
+    drop node_unlink(doc, child);
+    int64:last = doc.nodes[parent].info.last_child;
+    doc.nodes[child].info.parent = parent; doc.nodes[child].info.prev = last;
+    if (last != NO_NODE) { doc.nodes[last].info.next = child; }
+    else { doc.nodes[parent].info.first_child = child; }
+    doc.nodes[parent].info.last_child = child; pass NIL;
+};
+pub func:node_prepend_child = NIL(Document->:doc, int64:parent, int64:child) never fails {
+    if (!(raw can_contain(<-doc, parent, child))) { pass NIL; }
+    drop node_unlink(doc, child);
+    int64:first = doc.nodes[parent].info.first_child;
+    doc.nodes[child].info.parent = parent; doc.nodes[child].info.next = first;
+    if (first != NO_NODE) { doc.nodes[first].info.prev = child; }
+    else { doc.nodes[parent].info.last_child = child; }
+    doc.nodes[parent].info.first_child = child; pass NIL;
+};
+pub func:node_insert_before = NIL(Document->:doc, int64:sibling, int64:n) never fails {
+    if (sibling == n || !(raw valid(<-doc, sibling))) { pass NIL; }
+    int64:parent = doc.nodes[sibling].info.parent;
+    if (!(raw can_contain(<-doc, parent, n))) { pass NIL; }
+    drop node_unlink(doc, n);
+    int64:prev = doc.nodes[sibling].info.prev;
+    doc.nodes[n].info.parent = parent; doc.nodes[n].info.prev = prev;
+    doc.nodes[n].info.next = sibling; doc.nodes[sibling].info.prev = n;
+    if (prev != NO_NODE) { doc.nodes[prev].info.next = n; }
+    else { doc.nodes[parent].info.first_child = n; }
+    pass NIL;
+};
+pub func:node_insert_after = NIL(Document->:doc, int64:sibling, int64:n) never fails {
+    if (sibling == n || !(raw valid(<-doc, sibling))) { pass NIL; }
+    int64:parent = doc.nodes[sibling].info.parent;
+    if (!(raw can_contain(<-doc, parent, n))) { pass NIL; }
+    drop node_unlink(doc, n);
+    int64:next = doc.nodes[sibling].info.next;
+    doc.nodes[n].info.parent = parent; doc.nodes[n].info.next = next;
+    doc.nodes[n].info.prev = sibling; doc.nodes[sibling].info.next = n;
+    if (next != NO_NODE) { doc.nodes[next].info.prev = n; }
+    else { doc.nodes[parent].info.last_child = n; }
+    pass NIL;
+};
+pub func:node_replace = NIL(Document->:doc, int64:target, int64:replacement) never fails {
+    if (target == replacement || !(raw valid(<-doc, target))) { pass NIL; }
+    if (!(raw can_contain(<-doc, doc.nodes[target].info.parent, replacement))) { pass NIL; }
+    drop node_insert_before(doc, target, replacement);
+    drop node_unlink(doc, target); pass NIL;
+};
+
+func:is_leaf = bool(NodeKind:k) never fails {
+    pass (k == NodeKind.HtmlBlock || k == NodeKind.ThematicBreak || k == NodeKind.CodeBlock
+        || k == NodeKind.Text || k == NodeKind.Softbreak || k == NodeKind.Linebreak
+        || k == NodeKind.Code || k == NodeKind.HtmlInline);
+};
+pub func:iter_new = Iter(int64:root) never fails {
+    pass Iter{ root: root, current: NO_NODE, event: Event.Done, started: false };
+};
+pub func:iter_next = Step(Document:doc, Iter->:it) never fails {
+    if (!it.started) {
+        it.started = true;
+        if (raw valid(doc, it.root)) { it.current = it.root; it.event = Event.Enter; }
+    } else if (it.event != Event.Done) {
+        NodeInfo:i = raw node_info(doc, it.current);
+        // Read children only now: the caller may have added them on Enter.
+        if (it.event == Event.Enter && i.first_child != NO_NODE) {
+            it.current = i.first_child; it.event = Event.Enter;
+        } else if (it.event == Event.Enter && !(raw is_leaf(i.kind))) {
+            it.event = Event.Exit;
+        } else if (it.current == it.root) {
+            it.current = NO_NODE; it.event = Event.Done;
+        } else if (i.next != NO_NODE) {
+            it.current = i.next; it.event = Event.Enter;
+        } else {
+            it.current = i.parent; it.event = Event.Exit;
+        }
+    }
+    pass Step{ event: it.event, node: it.current };
+};
+
+// Direct depth-first traversal, outside any iterator walk. Each node is visited
+// once; each adjacent text run is copied into one allocation, avoiding repeated
+// concatenation of an increasingly long prefix. No list slot is removed.
+pub func:consolidate_text_nodes = NIL(Document->:doc, int64:root) never fails {
+    if (!(raw valid(<-doc, root))) { pass NIL; }
+    int64:cur = root;
+    int64:fuel = doc.nodes.count * 2i64;
+    while (cur != NO_NODE && fuel > 0i64) decreases fuel {
+        fuel = fuel - 1i64;
+        if (doc.nodes[cur].info.kind == NodeKind.Text) {
+            int64:run_next = doc.nodes[cur].info.next;
+            int64:total = doc.nodes[cur].literal.len;
+            int64:left = doc.nodes.count;
+            int64:after = run_next;
+            while (after != NO_NODE && left > 0i64) decreases left {
+                if (doc.nodes[after].info.kind != NodeKind.Text) { break; }
+                total = total + doc.nodes[after].literal.len;
+                after = doc.nodes[after].info.next; left = left - 1i64;
+            }
+            if (run_next != after) {
+                buffer:joined = buffer_new(total);
+                int64:offset = 0i64;
+                int64:part = cur;
+                int64:remaining = doc.nodes.count;
+                while (part != after && remaining > 0i64) decreases remaining {
+                    {
+                        fixed uint8[]:bytes = string_bytes(doc.nodes[part].literal);
+                        int64:b = 0i64;
+                        while (b < bytes.len) decreases bytes.len - b {
+                            joined[offset] = bytes[b]; offset = offset + 1i64; b = b + 1i64;
+                        }
+                    }
+                    int64:next = doc.nodes[part].info.next;
+                    if (part != cur) {
+                        // cmark retains the first start position and extends
+                        // its end column to the last merged text node.
+                        doc.nodes[cur].info.end_column = doc.nodes[part].info.end_column;
+                        drop node_unlink(doc, part);
+                    }
+                    part = next; remaining = remaining - 1i64;
+                }
+                {
+                    fixed uint8[]:bytes = joined[0i64...total];
+                    string:view = string_from_bytes(bytes.ptr, bytes.len);
+                    string:owned = string_concat(view, "");
+                    doc.nodes[cur].literal = move(owned);
+                }
+            }
+        }
+        if (doc.nodes[cur].info.first_child != NO_NODE) {
+            cur = doc.nodes[cur].info.first_child;
+        } else {
+            int64:left = doc.nodes.count;
+            while (cur != root && doc.nodes[cur].info.next == NO_NODE && left > 0i64) decreases left {
+                cur = doc.nodes[cur].info.parent; left = left - 1i64;
+            }
+            if (cur == root) { cur = NO_NODE; }
+            else { cur = doc.nodes[cur].info.next; }
+        }
+    }
+    pass NIL;
+};
