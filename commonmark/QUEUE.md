@@ -44,17 +44,18 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 
 1. `next` — **seam tests: utf8** (tests/seams/utf8/), from INTERFACES.md Part 2 alone.
 2. `ready` — **seam tests: node** (tests/seams/node/), from INTERFACES.md Part 5 alone. The folder starts empty; you write the tests.
+3. `ready` — **seam tests: scan** (tests/seams/scan/), from INTERFACES.md Part 4 alone. The folder starts empty; you write the tests. Note the seam from `reviews/scan.md`: scanners return match lengths, not cmark's classification codes.
 
 ### GPT-OSS
 
-1. `next` — **seam tests: scan** (tests/seams/scan/), from INTERFACES.md Part 4 alone. The folder starts empty — you write the test program and harness (see the seam-test rule above); replace the blocked-status NOTES.md from the first attempt with the real notes. Note the seam from `reviews/scan.md`: scanners return match lengths, not cmark's classification codes.
-2. `ready` — **seam tests: escape** (tests/seams/escape/), from INTERFACES.md Part 3 alone. Same starting state: the folder is yours to create the tests in.
+1. `next` — **seam tests: escape** (tests/seams/escape/), from INTERFACES.md Part 3 alone. The folder starts empty — you write the test program and harness (see the seam-test rule above); replace the blocked-status NOTES.md from the first attempt with the real notes.
 
 ### Manager (Muse)
 
 - Briefs: node posted (`briefs/node.md`). Still to post: blocks, inlines, html (in that order).
 - Driver part last, after html is reviewed; then the step PRs to `main` per step, with the credits table in `commonmark/README.md`.
-- 2026-11-27: **Sonnet** (Claude Sonnet 5.5, Anthropic) and **GPT-OSS** (GPT-OSS 120B, OpenAI) joined via management's launcher on the agy Claude+GPT group. Their sessions stop by themselves at the group's 75 % line, so their queue lines are kept short. Reassignments to seat them: utf8 seam tests Carbon → Sonnet; node seam tests Neon → Sonnet; scan seam tests Astra → GPT-OSS; escape seam tests Sol → GPT-OSS.
+- 2026-11-27: **Sonnet** (Claude Sonnet 5.5, Anthropic) and **GPT-OSS** (GPT-OSS 120B, OpenAI) joined via management's launcher on the agy Claude+GPT group. Their sessions stop by themselves at the group's 75 % line, so their queue lines are kept short. Reassignments to seat them: utf8 seam tests Carbon → Sonnet; node seam tests Neon → Sonnet; scan seam tests Astra → Sonnet (via GPT-OSS, see below); escape seam tests Sol → GPT-OSS.
+- 2026-11-27: **GPT-OSS is the smallest model in the rotation** (Randy's assessment: a 120B open model — capable, but not in the Sol/Astra/Claude/Gemini league; its first session waited for seam-test files to be provided instead of writing them). Reserve it for mechanical work where reasoning is not the bottleneck: harness re-runs, table-regeneration checks, example tabulation — the driver step's 652-example run is earmarked for it. It keeps the escape seam tests (the most bounded suite: six functions, byte-level expectations); the scan seam tests moved to Sonnet, whose utf8 seam work landed well.
 - 2026-11-27: **launcher fault, fixed by management.** Until now the launcher started Astra without naming its model, so the workshop's Astra sessions actually ran Sol 6.2. The buffer seam tests delivered under Astra's name were therefore written by Sol 6.2 — the buffer part's own author — and the credits will say so; the real Astra (gpt-6.2-astra from now on) has the confirmation-pass line above. Management's note scopes this to the workshop launcher.
 - 2026-11-27: **Sol's launcher entry was likewise hardcoded to 6.1** (Randy, confirmed and fixed the same day): the workshop's Sol sessions so far — buffer, scan, and the node part delivered today — ran Sol 6.1; Sol is 6.2 from now on. The manager reviews of buffer and scan stand as written: they rest on the manager's own re-runs against the contract and cmark, not on who held the pen.
 
