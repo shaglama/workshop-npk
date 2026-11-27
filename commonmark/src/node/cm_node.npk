@@ -155,16 +155,18 @@ pub func:doc_ref_lookup = RefHit(Document:doc, string:base, Chunk:label) {
 // Invalid surgery is a no-op: the port's NIL signature has no status result.
 func:can_contain = bool(Document:doc, int64:parent, int64:child) never fails {
     if (!(raw valid(doc, parent)) || !(raw valid(doc, child)) || parent == child) { pass false; }
-    int64:ancestor = parent;
-    int64:left = doc.nodes.count;
-    while (ancestor != NO_NODE && left > 0i64) decreases left {
-        if (ancestor == child) { pass false; }
-        ancestor = doc.nodes[ancestor].info.parent;
-        left = left - 1i64;
+    if (doc.nodes[child].info.first_child != NO_NODE) {
+        int64:ancestor = doc.nodes[parent].info.parent;
+        int64:left = doc.nodes.count;
+        while (ancestor != NO_NODE && left > 0i64) decreases left {
+            if (ancestor == child) { pass false; }
+            ancestor = doc.nodes[ancestor].info.parent;
+            left = left - 1i64;
+        }
     }
     NodeKind:p = doc.nodes[parent].info.kind;
     NodeKind:c = doc.nodes[child].info.kind;
-    if (c == NodeKind.DocumentNode || c == NodeKind.None) { pass false; }
+    if (c == NodeKind.DocumentNode) { pass false; }
     bool:block = (c =>! int32) >= (NodeKind.DocumentNode =>! int32)
         && (c =>! int32) <= (NodeKind.ThematicBreak =>! int32);
     bool:inl = (c =>! int32) >= (NodeKind.Text =>! int32)

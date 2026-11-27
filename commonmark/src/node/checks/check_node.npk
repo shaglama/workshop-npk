@@ -162,6 +162,17 @@ func:surgery = int32() {
     // Slots are never reused, even for completely detached nodes.
     int64:last = raw node_new(@d, NodeKind.Code);
     if (last <= inner || (raw node_info(d, b)).kind != NodeKind.Text) { pass 30i32; }
+    // An allocated None node is distinct from the absent index. cmark allows
+    // it in a custom block, but not in a paragraph.
+    int64:custom = raw node_new(@d, NodeKind.CustomBlock);
+    int64:none = raw node_new(@d, NodeKind.None);
+    drop node_append_child(@d, r, custom);
+    drop node_prepend_child(@d, custom, none);
+    drop node_append_child(@d, p, none);
+    drop node_append_child(@d, custom, r);
+    if (!(raw links(d, custom, r, quote, NO_NODE, none, none))
+        || !(raw links(d, none, custom, NO_NODE, NO_NODE, NO_NODE, NO_NODE))
+        || (raw node_info(d, r)).parent != NO_NODE) { pass 31i32; }
     pass 0i32;
 };
 

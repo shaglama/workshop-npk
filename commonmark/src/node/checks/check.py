@@ -36,7 +36,7 @@ def main() -> int:
         "Compiler commit: 3a45b7c4 (public pin supplied with this workspace)",
         "npkc sha256: " + hashlib.sha256(COMPILER.read_bytes()).hexdigest(),
         "npkrt.o sha256: " + hashlib.sha256(RUNTIME.read_bytes()).hexdigest(),
-        "Writer checks: every Part 5 function; independent seam suite by Neon is separate.",
+        "Writer checks: every Part 5 function; independent seam suite by Sonnet is separate.",
         "Expected: exit 0 and the six literal PASS lines and final success line below, at both -O0 and -O2.",
         "",
     ]

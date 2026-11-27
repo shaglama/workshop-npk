@@ -29,7 +29,9 @@ manual frees.
 
 Surgery updates both sibling directions and both parent endpoints, detaching
 existing attachments first. It checks cmark's containment and ancestor rules
-before changing links. Invalid containment or a root sibling operation is a
+before changing links. An incoming node with no children needs no ancestor
+walk. A custom block accepts an allocated `None` node and rejects a
+`DocumentNode`, as cmark does. Invalid containment or a root sibling operation is a
 no-op (the contract returns NIL rather than cmark's boolean status); inserting
 or replacing a node with itself is also a no-op. Accessors/setters otherwise
 expect NodeRefs belonging to the supplied Document. `node_info` of an absent
@@ -80,8 +82,8 @@ exit status, output, LLVM tool versions, compiler commit `3a45b7c4`, and hashes:
 root establishment; store growth; all plain payload fields and all string
 getters/setters; independent clones surviving replacement; byte strings with
 NUL and 0xFF; wide positions; every surgery with endpoint and sibling checks;
-reparenting, adjacent replacement, idempotent unlink, invalid containment and
-cycle rejection; a hand-written full iterator trace with Exit and Done; subtree
+reparenting, adjacent replacement, idempotent unlink, invalid containment,
+custom-block containment and cycle rejection; a hand-written full iterator trace with Exit and Done; subtree
 and leaf walks; child creation on Enter; nested text consolidation, retained
 detached nodes, end_column, idempotence, a Text root, and a 1024-node text run;
 and moved reference maps, normalized sub-chunk lookup, map replacement, and
@@ -94,8 +96,9 @@ assumed clean_url removes angle brackets. Part 3 specifies whitespace trimming
 and unescaping only. Corrected the input to ` a&amp;b ` with the independently
 specified expectation `a&b`; no dependency implementation was changed.
 
-These are the required writer checks. Neon's independent seam suite and Astra's
-review are separate handoff steps and are not supplied in this workspace.
+These are the brief's writer checks. The brief names Neon for the independent
+node seam suite, and the queue reassigns that suite to Sonnet. The independent
+suite and Astra's review are pending handoff steps.
 
 ## Compiler notes
 
