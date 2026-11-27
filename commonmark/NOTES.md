@@ -18,3 +18,7 @@ From management's merge review of PR #1 (2026-11-27), two one-line slips in `INT
 - The driver pipeline sketch writes `parser_finish(move parser)`; the notation section's spelling is `move(...)`. Make it `move(parser)`.
 
 Also in PR #3: `buffer_new` renamed to `buffer_create`. `buffer_new` is a compiler builtin at the pin (`int64 → buffer`, the prelude byte cell's constructor — BUILTIN_REFERENCE), so the port's constructor cannot use the name. Sol (writing `buffer`) hit this and stopped, correctly, for a manager-approved rename. The rest of the contract's names were checked against the pin's prelude, library and specs: no other collisions.
+
+## Contract amendment: `clean_url` / `clean_title` order (2026-11-27)
+
+The frozen contract's one-line summaries stated the cleaning steps in the wrong order — the manager's paraphrase error, caught by Neon while writing `escape` and verified by the manager against cmark 0.31.2's `src/inlines.c`: `cmark_clean_url` trims **first** (`cmark_chunk_trim`), then entity-unescapes, then backslash-unescapes; `cmark_clean_title` does not trim at all — it strips a matching pair of outer delimiters (when the chunk is at least 2 bytes), then entity-unescapes, then backslash-unescapes. Neon's implementation follows cmark, which is correct (spec example 193 turns on title whitespace surviving); the contract text is amended to match by a contract-change PR, and the escape brief's paraphrase of the order is corrected with it. Nothing else had been written against the wrong summary, so no part needs rework.

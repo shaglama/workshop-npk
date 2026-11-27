@@ -13,7 +13,7 @@
 
 ## The job
 
-Implement `cm_escape` in `src/escape/`: HTML escaping, href escaping, entity unescaping, backslash unescaping, and `clean_url` / `clean_title`, with the contract's exact signatures and failure marks. The cleaning order is cmark's: entity-unescape, then backslash-unescape, then trim. A backslash before an ASCII punctuation character is dropped; any other backslash is kept.
+Implement `cm_escape` in `src/escape/`: HTML escaping, href escaping, entity unescaping, backslash unescaping, and `clean_url` / `clean_title`, with the contract's exact signatures and failure marks. The cleaning steps follow cmark's `inlines.c` exactly: `clean_url` trims first, then entity-unescapes, then backslash-unescapes; `clean_title` does not trim — it strips a matching pair of outer delimiters, then unescapes the same way. (Corrected 2026-11-27: an earlier version of this brief, like the contract's summary line, stated the order the wrong way round; the implementation as delivered follows cmark.) A backslash before an ASCII punctuation character is dropped; any other backslash is kept.
 
 The entity table is **generated data**: write a small generator script that produces the Nitpick data module from cmark's `entities.inc` at tag 0.31.2 — a verbatim copy is in the repo at `commonmark/spec/entities.inc`, so no cmark checkout is needed — keep the script beside the table in `src/escape/`, name the source file and tag in the generated module's header, and commit both. Nobody hand-edits the generated table.
 
