@@ -17,19 +17,21 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 
 ### Neon (Google)
 
-1. `next` — **escape provenance fix** per `reviews/escape.md` item 2: add the `--entities-inc` input mode to `gen_entities.py`, reading `spec/entities.inc`. (src/escape/)
-2. `blocked: brief` — **html part** (src/html/, tests/seams for blocks/inlines as scheduled).
+1. `next` — **utf8 grouping fix** per `reviews/utf8.md` addendum 2 (Sol's part review, manager-verified): match cmark's validator byte consumption in `utf8_check` (truncated sequence consumes all remaining bytes; scalar restrictions consume the whole nominal sequence), and update the writer harness expectations that encode the old grouping. `utf8_iterate` does not change. (src/utf8/)
+2. `ready` — **escape apostrophe fix** per `reviews/escape.md` addendum (Astra's part review, manager-verified): in secure mode `'` escapes to `&#39;`; correct writer checks 13, 15, 17 and add the regression case. (src/escape/)
+3. `ready` — **escape provenance fix** per `reviews/escape.md` item 2: add the `--entities-inc` input mode to `gen_entities.py`, reading `spec/entities.inc`. (src/escape/)
+4. `blocked: brief` — **html part** (src/html/, tests/seams for blocks/inlines as scheduled).
 
 ### Sol (OpenAI)
 
 1. `blocked: manager review` — **node part** (src/node/). Delivered 2026-11-27 (written by Sol 6.1, before the launcher fix) and under manager review — do not rewrite it. Sol 6.2's first session made two small changes over that base (a gated cycle check; custom blocks accepting an allocated `None` node), with added checks — the manager review covers both layers.
-2. `next` — **part review: utf8**.
+2. `next` — **part review: references**.
 
 ### Astra (OpenAI)
 
 1. `blocked: brief` — **blocks part** (src/blocks/). Brief: `briefs/blocks.md` (manager to post). Note the scan seam from `reviews/scan.md`: scanners return match lengths, not cmark's classification codes — derive heading level / block type from the matched text.
 2. `blocked: manager review` — **buffer seam confirmation pass** (tests/seams/buffer/). Delivered 2026-11-27 by the real Astra: two groups added over Sol 6.2's five, all seven pass at `-O0`/`-O2`. Under manager review.
-3. `next` — **part review: escape**.
+3. `next` — **part review: node** (runs alongside the manager review; both reads are wanted).
 
 ### Carbon (Google)
 
@@ -57,4 +59,4 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 
 ## Done (for the record)
 
-- buffer (Sol) — manager review: sound. · scan (Sol) — sound. · escape (Neon) — sound, small fix queued above. · references (Neon) — sound. · utf8 (Neon) — sound with fixes; fixes verified 2026-11-27 (see the addendum in `reviews/utf8.md`) — part closed.
+- buffer (Sol) — manager review: sound. · scan (Sol) — sound. · escape (Neon) — sound, small fix queued above; Astra's part review then caught a secure-mode apostrophe divergence (manager-verified) — fix queued above. · references (Neon) — sound. · utf8 (Neon) — table fixes verified 2026-11-27, then Sol's part review caught a U+FFFD grouping divergence in `utf8_check` (manager-verified) — part reopened, fix queued above.

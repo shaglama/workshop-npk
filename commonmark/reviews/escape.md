@@ -20,3 +20,11 @@ The frozen contract's summary lines for `clean_url` / `clean_title` stated the c
 ## Compiler notes
 
 None. No possible compiler fault observed by the writer or on the re-run; -O0 and -O2 agree throughout.
+
+## Addendum (2026-11-27): worker review catch — secure-mode apostrophe
+
+Astra's part review of this part (recorded by her in `src/blocks/notes.md`) found a real divergence the manager review missed — and this review's own summary above states the wrong behaviour ("the secure mode's `/` → `&#47;` and `'` passing through"). Correction: in cmark 0.31.2's `houdini_html_e.c`, the escape table maps `'` to entry 3 (`&#39;`), and the mode check copies `/` and `'` literally **only when not secure** — secure mode escapes six characters: `"` `&` `'` `/` `<` `>`. The port's `escape_html_into` escapes five, leaving `'` literal in both modes.
+
+Manager verification: read `houdini_html_e.c` at the tag (table and mode check as above), and ran a probe against the port on cloud3 at `-O0`/`-O2`: input `'` with `secure = true` produced the literal byte 39 (cmark: `&#39;`); with `secure = false` byte 39 (correct); `/` with `secure = true` produced `&#47;` (correct — the secure branch works; only the apostrophe is missing). Practical scope: cmark's HTML renderer calls the escaper with secure mode off, so ordinary Markdown-to-HTML output is unaffected; the contract's secure mode must still match cmark's function.
+
+**Fix for Neon (queued):** in `escape_html_into`, treat `'` like `/` — literal when not secure, `&#39;` when secure; correct the secure expectations in writer checks 13, 15 and 17; add Astra's regression case `expect_html("'", chunk_all("'"), true, "&#39;")`. Astra also re-verified the entity table against `spec/entities.inc` (all 2,125 names and replacements match) and the other five functions against the tagged sources; the manager concurs.
