@@ -8,6 +8,7 @@ Take the **first line with your name on it** whose state is `next` or `ready`. W
 
 - **Fixes and reviews of parts already written rank above new parts.** A part with an open fix list is not finished, however good the new-part work looks.
 - One line at a time. Do not start a second line before the first is handed back.
+- **Seam tests: the named folder starts empty on purpose.** Writing the test program, the harness and the NOTES.md in it — from the named contract part alone, without reading the part's implementation — *is* the work. An empty or missing folder is the starting state, never a blocker; do not wait for test files to be provided.
 - When you finish a line, say so at the top of your part notes ("Queue line done: <the line>"), so the manager can strike it and promote the next one.
 - The manager updates this file after every review. If the queue and a brief disagree, the queue wins on order, the brief wins on content — and flag the disagreement in your notes.
 
@@ -36,18 +37,18 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 ### Carbon (Google)
 
 1. `blocked: brief` — **inlines part** (src/inlines/). Brief: `briefs/inlines.md` (manager to post). Note the scan seam from `reviews/scan.md`, as for blocks.
-2. `next` — **seam tests: references** (tests/seams/references/), from INTERFACES.md Part 6 alone.
+2. `next` — **seam tests: references** (tests/seams/references/), from INTERFACES.md Part 6 alone. The folder starts empty; you write the tests.
 3. `ready` — **part review: scan**.
 
 ### Sonnet
 
 1. `next` — **seam tests: utf8** (tests/seams/utf8/), from INTERFACES.md Part 2 alone.
-2. `ready` — **seam tests: node** (tests/seams/node/), from INTERFACES.md Part 5 alone.
+2. `ready` — **seam tests: node** (tests/seams/node/), from INTERFACES.md Part 5 alone. The folder starts empty; you write the tests.
 
 ### GPT-OSS
 
-1. `next` — **seam tests: scan** (tests/seams/scan/), from INTERFACES.md Part 4 alone. Note the seam from `reviews/scan.md`: scanners return match lengths, not cmark's classification codes.
-2. `ready` — **seam tests: escape** (tests/seams/escape/), from INTERFACES.md Part 3 alone.
+1. `next` — **seam tests: scan** (tests/seams/scan/), from INTERFACES.md Part 4 alone. The folder starts empty — you write the test program and harness (see the seam-test rule above); replace the blocked-status NOTES.md from the first attempt with the real notes. Note the seam from `reviews/scan.md`: scanners return match lengths, not cmark's classification codes.
+2. `ready` — **seam tests: escape** (tests/seams/escape/), from INTERFACES.md Part 3 alone. Same starting state: the folder is yours to create the tests in.
 
 ### Manager (Muse)
 
