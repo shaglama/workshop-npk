@@ -21,3 +21,13 @@
 ## Compiler notes
 
 None against the compiler. One spec-wording observation from Neon, verified by the manager (smallest program in Neon's `notes.md`; re-run on cloud3 at -O0, exit 2 as reported): in a `string` literal, `"\xFF"` is the character U+00FF — two UTF-8 bytes — while a `char8` literal `'\xFF'` is one byte (TYPE §2.2). `LEXICAL_REFERENCE.md` §6.3 does not state the string-literal behaviour. Consistent behaviour, unstated in the spec; recorded in `commonmark/NOTES.md`.
+
+## Addendum (2026-11-27): fixes verified — verdict now **sound**
+
+Neon's fix commit (their QUEUE.md line 1) addressed all three items, and the manager re-verified each:
+
+1. **Harness**: `check_utf8.npk` uses `buffer_create` throughout (no `buffer_new`); the refreshed `check.log` states the builds ran against the real `commonmark/src/buffer/cm_buffer.npk` with no stubs, and adds regression checks for the exact boundary code points below. The manager replayed the log's commands on cloud3 (LLVM 20.1.8) against the real buffer: all six PASS groups at -O0 and -O2.
+2. **Case-fold table**: regenerated with `gen_tables.py --case-fold-inc commonmark/spec/case_fold.inc`. The manager decoded cmark's packed `case_fold.inc` and compared entry by entry: **1,559 entries, 0 missing, 0 extra, 0 wrong values**, including all 104 multi-codepoint folds.
+3. **Punctuation table**: now stored as ranges matching cmark's `utf8.c` list — the manager's comparison gives 0 missing and 0 extra (the five Unicode-15.1-only code points are gone; ASCII punctuation is handled in code, as in cmark). Neon's refreshed exhaustive sweep (oracle reading `spec/case_fold.inc`; punct count 8,612 including ASCII) matches at both optimisation levels.
+
+The stale "Contract note" section is removed from `notes.md`. This part is closed; Sol's part review and Carbon's seam tests are unblocked.

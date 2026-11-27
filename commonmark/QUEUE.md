@@ -17,15 +17,14 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 
 ### Neon (Google)
 
-1. `next` — **utf8 fixes** per `reviews/utf8.md`: harness on the real `cm_buffer` (`buffer_create`) with a refreshed `check.log` from the real tree; regenerate both tables from `spec/case_fold.inc` and cmark's `utf8.c` via the new `--case-fold-inc` mode. (src/utf8/)
-2. `ready` — **escape provenance fix** per `reviews/escape.md` item 2: add the `--entities-inc` input mode to `gen_entities.py`, reading `spec/entities.inc`. (src/escape/)
+1. `next` — **escape provenance fix** per `reviews/escape.md` item 2: add the `--entities-inc` input mode to `gen_entities.py`, reading `spec/entities.inc`. (src/escape/)
 3. `blocked: brief` — **html part** (src/html/, tests/seams for node/blocks/inlines as scheduled).
 
 ### Sol (OpenAI)
 
 1. `next` — **node part** (src/node/). Brief: `briefs/node.md`.
 2. `ready` — **seam tests: escape** (tests/seams/escape/), from INTERFACES.md Part 3 alone.
-3. `blocked: Neon utf8 fixes` — **part review: utf8**.
+3. `ready` — **part review: utf8**.
 
 ### Astra (OpenAI)
 
@@ -38,7 +37,7 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 
 1. `blocked: brief` — **inlines part** (src/inlines/). Brief: `briefs/inlines.md` (manager to post). Note the scan seam from `reviews/scan.md`, as for blocks.
 2. `next` — **seam tests: references** (tests/seams/references/), from INTERFACES.md Part 6 alone.
-3. `blocked: Neon utf8 fixes` — **seam tests: utf8** (written against the fixed tables).
+3. `ready` — **seam tests: utf8**.
 4. `ready` — **part review: scan**.
 
 ### Manager (Muse)
@@ -48,4 +47,4 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 
 ## Done (for the record)
 
-- buffer (Sol) — manager review: sound. · scan (Sol) — sound. · escape (Neon) — sound, small fix queued above. · references (Neon) — sound. · utf8 (Neon) — sound with fixes, queued above.
+- buffer (Sol) — manager review: sound. · scan (Sol) — sound. · escape (Neon) — sound, small fix queued above. · references (Neon) — sound. · utf8 (Neon) — sound with fixes; fixes verified 2026-11-27 (see the addendum in `reviews/utf8.md`) — part closed.
