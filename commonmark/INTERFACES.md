@@ -61,7 +61,7 @@ cm_escape   → cm_buffer, cm_utf8
 cm_refs     → cm_buffer, cm_utf8, cm_scan, cm_escape
 cm_node     → cm_buffer, cm_refs
 cm_blocks   → cm_buffer, cm_utf8, cm_scan, cm_node, cm_refs, cm_escape
-cm_html     → cm_buffer, cm_utf8, cm_node, cm_escape
+cm_html     → cm_buffer, cm_utf8, cm_scan, cm_node, cm_escape
 cm_inlines  → cm_buffer, cm_utf8, cm_scan, cm_node, cm_refs, cm_escape
 cm_main     → every part
 ```
@@ -74,7 +74,7 @@ The growable byte buffer (cmark's `cmark_strbuf`) and the chunk helpers.
 
 ```
 Buffer                                  // owning, move-only; starts empty
-buffer_new() -> Result<Buffer>
+buffer_create() -> Result<Buffer>
 buffer_put(buf: Buffer*, base: string, c: Chunk) -> Result<NIL>   // append the chunk's bytes
 buffer_puts(buf: Buffer*, s: string) -> Result<NIL>               // append a whole string
 buffer_putc(buf: Buffer*, b: int64) -> Result<NIL>                // append one byte (0–255)
@@ -345,7 +345,7 @@ The driver's pipeline per input, in the contract's own forms — also the projec
 ```
 parser = parser_new(opts)?!
 parser_feed(@parser, input)?!
-document = parser_finish(move parser)?!
+document = parser_finish(move(parser))?!
 process_inlines(@document, opts)?!
 consolidate_text_nodes(@document, doc_root(document))
 html = render_html(document, doc_root(document), opts)?!
