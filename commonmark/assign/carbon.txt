@@ -1,0 +1,3 @@
+src/inlines/
+tests/seams/utf8/
+tests/seams/references/
