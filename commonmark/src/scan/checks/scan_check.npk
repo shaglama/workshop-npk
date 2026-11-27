@@ -1,0 +1,98 @@
+// Written by Sol (OpenAI). Writer checks; independent seams belong to Astra.
+mod:scan_check;
+use "../cm_scan.npk".*;
+use "../../../../pin/lib/nio.npk".{NioW, nio_stdout, nio_put, nio_line, nio_end};
+
+// Fixed little-endian test records: id:u8, (at+1):u32, expected:u32,
+// byte length:u32, then that many arbitrary input bytes. No text normalization.
+func:u32_at = int64(string:s, int64:at) never fails {
+    fixed uint8[]:bytes = string_bytes(s);
+    int64:value = 0i64;
+    int64:scale = 1i64;
+    for (int64:i in 0i64...4i64) {
+        value = value + (bytes[at + i] =>! int64) * scale;
+        scale = scale * 256i64;
+    }
+    pass value;
+};
+func:scan = int64(int64:id, string:base, int64:at) never fails {
+    pick (id) {
+        (0i64) { pass (raw scan_atx_heading_start(base, at)); },
+        (1i64) { pass (raw scan_setext_heading_line(base, at)); },
+        (2i64) { pass (raw scan_open_code_fence(base, at)); },
+        (3i64) { pass (raw scan_close_code_fence(base, at)); },
+        (4i64) { pass (raw scan_html_block_start(base, at)); },
+        (5i64) { pass (raw scan_html_block_start_7(base, at)); },
+        (6i64) { pass (raw scan_html_block_end_1(base, at)); },
+        (7i64) { pass (raw scan_html_block_end_2(base, at)); },
+        (8i64) { pass (raw scan_html_block_end_3(base, at)); },
+        (9i64) { pass (raw scan_html_block_end_4(base, at)); },
+        (10i64) { pass (raw scan_html_block_end_5(base, at)); },
+        (11i64) { pass (raw scan_spacechars(base, at)); },
+        (12i64) { pass (raw scan_scheme(base, at)); },
+        (13i64) { pass (raw scan_autolink_uri(base, at)); },
+        (14i64) { pass (raw scan_autolink_email(base, at)); },
+        (15i64) { pass (raw scan_html_tag(base, at)); },
+        (16i64) { pass (raw scan_html_comment(base, at)); },
+        (17i64) { pass (raw scan_html_pi(base, at)); },
+        (18i64) { pass (raw scan_html_declaration(base, at)); },
+        (19i64) { pass (raw scan_html_cdata(base, at)); },
+        (20i64) { pass (raw scan_link_title(base, at)); },
+        (21i64) { pass (raw scan_dangerous_url(base, at)); },
+        (*) { pass -1i64; }
+    }
+};
+func:run_checks = int32() {
+    string:records = relay read_stdin();
+    NioW:out = raw nio_stdout();
+    int64:pos = 0i64;
+    int64:count = 0i64;
+    while (pos < records.len) decreases records.len - pos {
+        fixed uint8[]:bytes = string_bytes(records);
+        int64:id = bytes[pos] =>! int64;
+        int64:at = (raw u32_at(records, pos + 1i64)) - 1i64;
+        int64:expected = raw u32_at(records, pos + 5i64);
+        int64:len = raw u32_at(records, pos + 9i64);
+        pos = pos + 13i64;
+        string:base = relay string_slice(records, pos, pos + len);
+        int64:actual = raw scan(id, base, at);
+        if (actual != expected) {
+            relay nio_put(@out, "FAIL case ");
+            string:label = relay count.to_string();
+            relay nio_put(@out, label);
+            relay nio_put(@out, " scanner ");
+            label = relay id.to_string();
+            relay nio_put(@out, label);
+            relay nio_put(@out, " expected ");
+            label = relay expected.to_string();
+            relay nio_put(@out, label);
+            relay nio_put(@out, " actual ");
+            label = relay actual.to_string();
+            relay nio_line(@out, label);
+            relay nio_end(@out);
+            pass 1i32;
+        }
+        pos = pos + len;
+        count = count + 1i64;
+    }
+    string:total = relay count.to_string();
+    relay nio_put(@out, "scan writer checks: PASS; cases=");
+    relay nio_line(@out, total);
+    relay nio_end(@out);
+    pass 0i32;
+};
+pub func:main = int32(cstring[]:_args) {
+    Result<int32>:r = run_checks();
+    if (r.is_error) { exit 92i32; }
+    exit r.value;
+};
+// Complete harness census: runtime allocation, checked arithmetic, casts,
+// indexing and loop measures below. Returned read/slice/format/IO errors use *.
+pub func:failsafe = int32(Error:e) {
+    pick (e) {
+        (Unreachable, HeapOom, HeapBadRequest, WildLeak, StackExhausted,
+         MachineFault, DivByZero, DivOverflow, IntOverflow, OutOfBounds,
+         DecreasesViolated, CastRange) { exit 91i32; },
+        (*) { exit 92i32; }
+    }
+};

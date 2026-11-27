@@ -3,7 +3,8 @@
 Part 1 implementation and writer checks are complete. Every function in the
 current frozen contract is implemented in `cm_buffer.npk`, using the approved
 constructor name `buffer_create`. The previous reserved-name blocker is resolved;
-the obsolete `buffer_new` negative reproduction and blocker log were removed.
+the `buffer_new` negative reproduction and blocker log remain in `checks/`
+as a documented negative check.
 
 ## Implementation
 

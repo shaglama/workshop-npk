@@ -1,0 +1,502 @@
+// Written by Sol (OpenAI).
+// Hand port of cmark 0.31.2 src/scanners.re, John MacFarlane and contributors.
+// BSD-2-Clause; notices in ../../LICENSES/COPYING.
+// All returns are byte match lengths, as required by INTERFACES.md Part 4.
+mod:cm_scan;
+
+// A virtual NUL at the string boundary replaces cmark's sentinel write.
+// Embedded NUL also terminates the source patterns. No text view escapes.
+func:byte_at = int64(string:base, int64:at) never fails {
+    if ((at < 0i64) || (at >= base.len)) { pass 0i64; }
+    fixed uint8[]:bytes = string_bytes(base);
+    pass (bytes[at] =>! int64);
+};
+func:ascii_lower = int64(int64:b) never fails {
+    if ((b >= 65i64) && (b <= 90i64)) { pass b + 32i64; }
+    pass b;
+};
+func:alpha = bool(int64:b) never fails {
+    int64:c = raw ascii_lower(b);
+    pass (c >= 97i64) && (c <= 122i64);
+};
+func:digit = bool(int64:b) never fails { pass (b >= 48i64) && (b <= 57i64); };
+func:alnum = bool(int64:b) never fails { pass (raw alpha(b)) || (raw digit(b)); };
+func:spacechar = bool(int64:b) never fails {
+    pass (b == 32i64) || ((b >= 9i64) && (b <= 13i64));
+};
+func:line_end = bool(int64:b) never fails { pass (b == 10i64) || (b == 13i64); };
+func:horizontal = bool(int64:b) never fails { pass (b == 32i64) || (b == 9i64); };
+func:prefix = bool(string:base, int64:at, string:word, bool:fold) never fails {
+    if ((at < 0i64) || (at > base.len)) { pass false; }
+    if (word.len > base.len - at) { pass false; }
+    int64:i = 0i64;
+    while (i < word.len) decreases word.len - i {
+        int64:a = raw byte_at(base, at + i);
+        int64:b = raw byte_at(word, i);
+        if (fold) { a = raw ascii_lower(a); b = raw ascii_lower(b); }
+        if (a != b) { pass false; }
+        i = i + 1i64;
+    }
+    pass true;
+};
+
+pub func:scan_spacechars = int64(string:base, int64:at) never fails {
+    if ((at < 0i64) || (at >= base.len)) { pass 0i64; }
+    int64:i = at;
+    while (i < base.len) decreases base.len - i {
+        if (!(raw spacechar(raw byte_at(base, i)))) { break; }
+        i = i + 1i64;
+    }
+    pass i - at;
+};
+pub func:scan_atx_heading_start = int64(string:base, int64:at) never fails {
+    if ((raw byte_at(base, at)) != 35i64) { pass 0i64; }
+    int64:i = at;
+    while (i < base.len) decreases base.len - i {
+        if ((raw byte_at(base, i)) != 35i64) { break; }
+        i = i + 1i64;
+    }
+    if (i - at > 6i64) { pass 0i64; }
+    if (raw line_end(raw byte_at(base, i))) { pass i + 1i64 - at; }
+    int64:start = i;
+    while (i < base.len) decreases base.len - i {
+        if (!(raw horizontal(raw byte_at(base, i)))) { break; }
+        i = i + 1i64;
+    }
+    if (i == start) { pass 0i64; }
+    pass i - at;
+};
+pub func:scan_setext_heading_line = int64(string:base, int64:at) never fails {
+    int64:marker = raw byte_at(base, at);
+    if ((marker != 61i64) && (marker != 45i64)) { pass 0i64; }
+    int64:i = at;
+    while (i < base.len) decreases base.len - i {
+        if ((raw byte_at(base, i)) != marker) { break; }
+        i = i + 1i64;
+    }
+    while (i < base.len) decreases base.len - i {
+        if (!(raw horizontal(raw byte_at(base, i)))) { break; }
+        i = i + 1i64;
+    }
+    if (raw line_end(raw byte_at(base, i))) { pass i + 1i64 - at; }
+    pass 0i64;
+};
+func:code_fence = int64(string:base, int64:at, bool:closing) never fails {
+    int64:marker = raw byte_at(base, at);
+    if ((marker != 96i64) && (marker != 126i64)) { pass 0i64; }
+    int64:i = at;
+    while (i < base.len) decreases base.len - i {
+        if ((raw byte_at(base, i)) != marker) { break; }
+        i = i + 1i64;
+    }
+    int64:run = i - at;
+    if (run < 3i64) { pass 0i64; }
+    while (i < base.len) decreases base.len - i {
+        int64:b = raw byte_at(base, i);
+        if (raw line_end(b)) { pass run; }
+        if (b == 0i64) { pass 0i64; }
+        if (closing) {
+            if (!(raw horizontal(b))) { pass 0i64; }
+        } else {
+            if ((marker == 96i64) && (b == 96i64)) { pass 0i64; }
+        }
+        i = i + 1i64;
+    }
+    pass 0i64;
+};
+pub func:scan_open_code_fence = int64(string:base, int64:at) never fails {
+    pass (raw code_fence(base, at, false));
+};
+pub func:scan_close_code_fence = int64(string:base, int64:at) never fails {
+    pass (raw code_fence(base, at, true));
+};
+pub func:scan_scheme = int64(string:base, int64:at) never fails {
+    if (!(raw alpha(raw byte_at(base, at)))) { pass 0i64; }
+    int64:i = at + 1i64;
+    while (i < base.len) decreases base.len - i {
+        int64:b = raw byte_at(base, i);
+        if (!((raw alnum(b)) || (b == 46i64) || (b == 43i64) || (b == 45i64))) { break; }
+        i = i + 1i64;
+    }
+    int64:n = i - at;
+    if ((n >= 2i64) && (n <= 32i64) && ((raw byte_at(base, i)) == 58i64)) {
+        pass n + 1i64;
+    }
+    pass 0i64;
+};
+pub func:scan_autolink_uri = int64(string:base, int64:at) never fails {
+    int64:n = raw scan_scheme(base, at);
+    if (n == 0i64) { pass 0i64; }
+    int64:i = at + n;
+    while (i < base.len) decreases base.len - i {
+        int64:b = raw byte_at(base, i);
+        if (b == 62i64) { pass i + 1i64 - at; }
+        if ((b <= 32i64) || (b == 60i64)) { pass 0i64; }
+        i = i + 1i64;
+    }
+    pass 0i64;
+};
+func:email_local = bool(int64:b) never fails {
+    if (raw alnum(b)) { pass true; }
+    // [.!#$%&'*+/=?^_`{|}~-]
+    pass (b == 46i64) || (b == 33i64) || ((b >= 35i64) && (b <= 39i64)) ||
+         (b == 42i64) || (b == 43i64) || (b == 47i64) || (b == 61i64) ||
+         (b == 63i64) || ((b >= 94i64) && (b <= 96i64)) ||
+         ((b >= 123i64) && (b <= 126i64)) || (b == 45i64);
+};
+pub func:scan_autolink_email = int64(string:base, int64:at) never fails {
+    if ((at < 0i64) || (at >= base.len)) { pass 0i64; }
+    int64:i = at;
+    while (i < base.len) decreases base.len - i {
+        if (!(raw email_local(raw byte_at(base, i)))) { break; }
+        i = i + 1i64;
+    }
+    if ((i == at) || ((raw byte_at(base, i)) != 64i64)) { pass 0i64; }
+    i = i + 1i64;
+    while (i < base.len) decreases base.len - i {
+        int64:start = i;
+        if (!(raw alnum(raw byte_at(base, i)))) { pass 0i64; }
+        i = i + 1i64;
+        while (i < base.len) decreases base.len - i {
+            int64:b = raw byte_at(base, i);
+            if (!((raw alnum(b)) || (b == 45i64))) { break; }
+            i = i + 1i64;
+        }
+        if ((i - start > 63i64) || (!(raw alnum(raw byte_at(base, i - 1i64))))) { pass 0i64; }
+        int64:b = raw byte_at(base, i);
+        if (b == 62i64) { pass i + 1i64 - at; }
+        if (b != 46i64) { pass 0i64; }
+        i = i + 1i64;
+    }
+    pass 0i64;
+};
+
+func:tagname_end = int64(string:base, int64:at) never fails {
+    if (!(raw alpha(raw byte_at(base, at)))) { pass at; }
+    int64:i = at + 1i64;
+    while (i < base.len) decreases base.len - i {
+        int64:b = raw byte_at(base, i);
+        if (!((raw alnum(b)) || (b == 45i64))) { break; }
+        i = i + 1i64;
+    }
+    pass i;
+};
+func:attribute_start = bool(int64:b) never fails {
+    pass (raw alpha(b)) || (b == 95i64) || (b == 58i64);
+};
+func:attribute_rest = bool(int64:b) never fails {
+    pass (raw attribute_start(b)) || (raw digit(b)) || (b == 46i64) || (b == 45i64);
+};
+func:unquoted = bool(int64:b) never fails {
+    pass (b != 0i64) && (!(raw spacechar(b))) && (b != 34i64) && (b != 39i64) &&
+         (b != 61i64) && (b != 60i64) && (b != 62i64) && (b != 96i64);
+};
+pub func:scan_html_tag = int64(string:base, int64:at) never fails {
+    if ((at < 0i64) || (at >= base.len)) { pass 0i64; }
+    int64:i = at;
+    bool:closing = (raw byte_at(base, i)) == 47i64;
+    if (closing) { i = i + 1i64; }
+    int64:stop = raw tagname_end(base, i);
+    if (stop == i) { pass 0i64; }
+    i = stop;
+    // Each trip consumes whitespace and/or a nonempty attribute name/value.
+    while (i < base.len) decreases base.len - i {
+        int64:before_space = i;
+        i = i + (raw scan_spacechars(base, i));
+        int64:b = raw byte_at(base, i);
+        if (b == 62i64) { pass i + 1i64 - at; }
+        if (closing) { pass 0i64; }
+        if ((b == 47i64) && ((raw byte_at(base, i + 1i64)) == 62i64)) {
+            pass i + 2i64 - at;
+        }
+        if ((i == before_space) || (!(raw attribute_start(b)))) { pass 0i64; }
+        i = i + 1i64;
+        while (i < base.len) decreases base.len - i {
+            if (!(raw attribute_rest(raw byte_at(base, i)))) { break; }
+            i = i + 1i64;
+        }
+        int64:after_name = i;
+        int64:equal_at = i + (raw scan_spacechars(base, i));
+        if ((raw byte_at(base, equal_at)) == 61i64) {
+            i = equal_at + 1i64;
+            i = i + (raw scan_spacechars(base, i));
+            b = raw byte_at(base, i);
+            if ((b == 34i64) || (b == 39i64)) {
+                int64:quote = b;
+                i = i + 1i64;
+                while (i < base.len) decreases base.len - i {
+                    b = raw byte_at(base, i);
+                    if ((b == quote) || (b == 0i64)) { break; }
+                    i = i + 1i64;
+                }
+                if ((raw byte_at(base, i)) != quote) { pass 0i64; }
+                i = i + 1i64;
+            } else {
+                int64:value_start = i;
+                while (i < base.len) decreases base.len - i {
+                    if (!(raw unquoted(raw byte_at(base, i)))) { break; }
+                    i = i + 1i64;
+                }
+                if (i == value_start) { pass 0i64; }
+            }
+        } else { i = after_name; }
+    }
+    pass 0i64;
+};
+
+pub func:scan_html_comment = int64(string:base, int64:at) never fails {
+    if (!(raw prefix(base, at, "--", false))) { pass 0i64; }
+    int64:i = at + 2i64;
+    while (i < base.len) decreases base.len - i {
+        int64:b = raw byte_at(base, i);
+        if (b == 0i64) { pass 0i64; }
+        if (b != 45i64) { i = i + 1i64; }
+        else {
+            if (raw prefix(base, i, "-->", false)) { pass i + 3i64 - at; }
+            int64:next = raw byte_at(base, i + 1i64);
+            if (next == 0i64) { pass 0i64; }
+            if (next != 45i64) { i = i + 2i64; }
+            else {
+                int64:third = raw byte_at(base, i + 2i64);
+                if ((third == 0i64) || (third == 62i64)) { pass 0i64; }
+                i = i + 3i64;
+            }
+        }
+    }
+    pass 0i64;
+};
+pub func:scan_html_pi = int64(string:base, int64:at) never fails {
+    if ((at < 0i64) || (at >= base.len)) { pass 0i64; }
+    int64:i = at;
+    while (i < base.len) decreases base.len - i {
+        int64:b = raw byte_at(base, i);
+        if (b == 0i64) { break; }
+        if (b == 63i64) {
+            int64:next = raw byte_at(base, i + 1i64);
+            if ((next == 0i64) || (next == 62i64)) { break; }
+            i = i + 2i64;
+        } else { i = i + 1i64; }
+    }
+    pass i - at;
+};
+pub func:scan_html_declaration = int64(string:base, int64:at) never fails {
+    if (!(raw alpha(raw byte_at(base, at)))) { pass 0i64; }
+    int64:i = at + 1i64;
+    while (i < base.len) decreases base.len - i {
+        int64:b = raw byte_at(base, i);
+        if ((b == 0i64) || (b == 62i64)) { break; }
+        i = i + 1i64;
+    }
+    pass i - at;
+};
+pub func:scan_html_cdata = int64(string:base, int64:at) never fails {
+    if (!(raw prefix(base, at, "CDATA[", false))) { pass 0i64; }
+    int64:i = at + 6i64;
+    while (i < base.len) decreases base.len - i {
+        int64:b = raw byte_at(base, i);
+        if (b == 0i64) { break; }
+        if (b != 93i64) { i = i + 1i64; }
+        else {
+            int64:next = raw byte_at(base, i + 1i64);
+            if (next == 0i64) { break; }
+            if (next != 93i64) { i = i + 2i64; }
+            else {
+                int64:third = raw byte_at(base, i + 2i64);
+                if ((third == 0i64) || (third == 62i64)) { break; }
+                i = i + 3i64;
+            }
+        }
+    }
+    pass i - at;
+};
+
+pub func:scan_link_title = int64(string:base, int64:at) never fails {
+    int64:open = raw byte_at(base, at);
+    if ((open != 34i64) && (open != 39i64) && (open != 40i64)) { pass 0i64; }
+    int64:close = open;
+    if (open == 40i64) { close = 41i64; }
+    int64:i = at + 1i64;
+    int64:accepted = 0i64;
+    // In these regexes a backslash can ALSO be a literal body character.
+    // Remember every possible closing delimiter before trying its escaped form.
+    while (i < base.len) decreases base.len - i {
+        int64:b = raw byte_at(base, i);
+        if (b == 0i64) { break; }
+        bool:escaped = (i > at + 1i64) && ((raw byte_at(base, i - 1i64)) == 92i64);
+        if (b == close) {
+            accepted = i + 1i64 - at;
+            if (!escaped) { pass accepted; }
+        }
+        if ((open == 40i64) && (b == 40i64) && (!escaped)) { break; }
+        i = i + 1i64;
+    }
+    pass accepted;
+};
+
+// Single-quoted re2c literals are ASCII case-insensitive. The cmark whitelist
+// accepts a prefix such as data:image/png-extra too; do not tighten it here.
+pub func:scan_dangerous_url = int64(string:base, int64:at) never fails {
+    if ((raw prefix(base, at, "data:image/png", true)) ||
+        (raw prefix(base, at, "data:image/gif", true)) ||
+        (raw prefix(base, at, "data:image/jpeg", true)) ||
+        (raw prefix(base, at, "data:image/webp", true))) { pass 0i64; }
+    if (raw prefix(base, at, "javascript:", true)) { pass 11i64; }
+    if (raw prefix(base, at, "vbscript:", true)) { pass 9i64; }
+    if (raw prefix(base, at, "file:", true)) { pass 5i64; }
+    if (raw prefix(base, at, "data:", true)) { pass 5i64; }
+    pass 0i64;
+};
+
+// Find the last complete terminator before LF/NUL, matching the greedy
+// [^\n\x00]* prefix in all five block-end patterns.
+func:block_end = int64(string:base, int64:at, int64:kind) never fails {
+    if ((at < 0i64) || (at >= base.len)) { pass 0i64; }
+    int64:i = at;
+    int64:accepted = 0i64;
+    while (i < base.len) decreases base.len - i {
+        int64:b = raw byte_at(base, i);
+        if ((b == 0i64) || (b == 10i64)) { break; }
+        int64:n = 0i64;
+        if (kind == 1i64) {
+            if (raw prefix(base, i, "</script>", true)) { n = 9i64; }
+            if (raw prefix(base, i, "</pre>", true)) { n = 6i64; }
+            if (raw prefix(base, i, "</textarea>", true)) { n = 11i64; }
+            if (raw prefix(base, i, "</style>", true)) { n = 8i64; }
+        }
+        if ((kind == 2i64) && (raw prefix(base, i, "-->", false))) { n = 3i64; }
+        if ((kind == 3i64) && (raw prefix(base, i, "?>", false))) { n = 2i64; }
+        if ((kind == 4i64) && (b == 62i64)) { n = 1i64; }
+        if ((kind == 5i64) && (raw prefix(base, i, "]]>", false))) { n = 3i64; }
+        if (n > 0i64) { accepted = i + n - at; }
+        i = i + 1i64;
+    }
+    pass accepted;
+};
+pub func:scan_html_block_end_1 = int64(string:base, int64:at) never fails {
+    pass (raw block_end(base, at, 1i64));
+};
+pub func:scan_html_block_end_2 = int64(string:base, int64:at) never fails {
+    pass (raw block_end(base, at, 2i64));
+};
+pub func:scan_html_block_end_3 = int64(string:base, int64:at) never fails {
+    pass (raw block_end(base, at, 3i64));
+};
+pub func:scan_html_block_end_4 = int64(string:base, int64:at) never fails {
+    pass (raw block_end(base, at, 4i64));
+};
+pub func:scan_html_block_end_5 = int64(string:base, int64:at) never fails {
+    pass (raw block_end(base, at, 5i64));
+};
+
+func:block_tag = bool(string:base, int64:at, int64:stop) never fails {
+    // The exact blocktagname alternation in cmark 0.31.2 (including search).
+    if ((stop - at == 7i64) && (raw prefix(base, at, "address", true))) { pass true; }
+    if ((stop - at == 7i64) && (raw prefix(base, at, "article", true))) { pass true; }
+    if ((stop - at == 5i64) && (raw prefix(base, at, "aside", true))) { pass true; }
+    if ((stop - at == 4i64) && (raw prefix(base, at, "base", true))) { pass true; }
+    if ((stop - at == 8i64) && (raw prefix(base, at, "basefont", true))) { pass true; }
+    if ((stop - at == 10i64) && (raw prefix(base, at, "blockquote", true))) { pass true; }
+    if ((stop - at == 4i64) && (raw prefix(base, at, "body", true))) { pass true; }
+    if ((stop - at == 7i64) && (raw prefix(base, at, "caption", true))) { pass true; }
+    if ((stop - at == 6i64) && (raw prefix(base, at, "center", true))) { pass true; }
+    if ((stop - at == 3i64) && (raw prefix(base, at, "col", true))) { pass true; }
+    if ((stop - at == 8i64) && (raw prefix(base, at, "colgroup", true))) { pass true; }
+    if ((stop - at == 2i64) && (raw prefix(base, at, "dd", true))) { pass true; }
+    if ((stop - at == 7i64) && (raw prefix(base, at, "details", true))) { pass true; }
+    if ((stop - at == 6i64) && (raw prefix(base, at, "dialog", true))) { pass true; }
+    if ((stop - at == 3i64) && (raw prefix(base, at, "dir", true))) { pass true; }
+    if ((stop - at == 3i64) && (raw prefix(base, at, "div", true))) { pass true; }
+    if ((stop - at == 2i64) && (raw prefix(base, at, "dl", true))) { pass true; }
+    if ((stop - at == 2i64) && (raw prefix(base, at, "dt", true))) { pass true; }
+    if ((stop - at == 8i64) && (raw prefix(base, at, "fieldset", true))) { pass true; }
+    if ((stop - at == 10i64) && (raw prefix(base, at, "figcaption", true))) { pass true; }
+    if ((stop - at == 6i64) && (raw prefix(base, at, "figure", true))) { pass true; }
+    if ((stop - at == 6i64) && (raw prefix(base, at, "footer", true))) { pass true; }
+    if ((stop - at == 4i64) && (raw prefix(base, at, "form", true))) { pass true; }
+    if ((stop - at == 5i64) && (raw prefix(base, at, "frame", true))) { pass true; }
+    if ((stop - at == 8i64) && (raw prefix(base, at, "frameset", true))) { pass true; }
+    if ((stop - at == 2i64) && (raw prefix(base, at, "h1", true))) { pass true; }
+    if ((stop - at == 2i64) && (raw prefix(base, at, "h2", true))) { pass true; }
+    if ((stop - at == 2i64) && (raw prefix(base, at, "h3", true))) { pass true; }
+    if ((stop - at == 2i64) && (raw prefix(base, at, "h4", true))) { pass true; }
+    if ((stop - at == 2i64) && (raw prefix(base, at, "h5", true))) { pass true; }
+    if ((stop - at == 2i64) && (raw prefix(base, at, "h6", true))) { pass true; }
+    if ((stop - at == 4i64) && (raw prefix(base, at, "head", true))) { pass true; }
+    if ((stop - at == 6i64) && (raw prefix(base, at, "header", true))) { pass true; }
+    if ((stop - at == 2i64) && (raw prefix(base, at, "hr", true))) { pass true; }
+    if ((stop - at == 4i64) && (raw prefix(base, at, "html", true))) { pass true; }
+    if ((stop - at == 6i64) && (raw prefix(base, at, "iframe", true))) { pass true; }
+    if ((stop - at == 6i64) && (raw prefix(base, at, "legend", true))) { pass true; }
+    if ((stop - at == 2i64) && (raw prefix(base, at, "li", true))) { pass true; }
+    if ((stop - at == 4i64) && (raw prefix(base, at, "link", true))) { pass true; }
+    if ((stop - at == 4i64) && (raw prefix(base, at, "main", true))) { pass true; }
+    if ((stop - at == 4i64) && (raw prefix(base, at, "menu", true))) { pass true; }
+    if ((stop - at == 8i64) && (raw prefix(base, at, "menuitem", true))) { pass true; }
+    if ((stop - at == 3i64) && (raw prefix(base, at, "nav", true))) { pass true; }
+    if ((stop - at == 8i64) && (raw prefix(base, at, "noframes", true))) { pass true; }
+    if ((stop - at == 2i64) && (raw prefix(base, at, "ol", true))) { pass true; }
+    if ((stop - at == 8i64) && (raw prefix(base, at, "optgroup", true))) { pass true; }
+    if ((stop - at == 6i64) && (raw prefix(base, at, "option", true))) { pass true; }
+    if ((stop - at == 1i64) && (raw prefix(base, at, "p", true))) { pass true; }
+    if ((stop - at == 5i64) && (raw prefix(base, at, "param", true))) { pass true; }
+    if ((stop - at == 7i64) && (raw prefix(base, at, "section", true))) { pass true; }
+    if ((stop - at == 6i64) && (raw prefix(base, at, "search", true))) { pass true; }
+    if ((stop - at == 5i64) && (raw prefix(base, at, "title", true))) { pass true; }
+    if ((stop - at == 7i64) && (raw prefix(base, at, "summary", true))) { pass true; }
+    if ((stop - at == 5i64) && (raw prefix(base, at, "table", true))) { pass true; }
+    if ((stop - at == 5i64) && (raw prefix(base, at, "tbody", true))) { pass true; }
+    if ((stop - at == 2i64) && (raw prefix(base, at, "td", true))) { pass true; }
+    if ((stop - at == 5i64) && (raw prefix(base, at, "tfoot", true))) { pass true; }
+    if ((stop - at == 2i64) && (raw prefix(base, at, "th", true))) { pass true; }
+    if ((stop - at == 5i64) && (raw prefix(base, at, "thead", true))) { pass true; }
+    if ((stop - at == 2i64) && (raw prefix(base, at, "tr", true))) { pass true; }
+    if ((stop - at == 5i64) && (raw prefix(base, at, "track", true))) { pass true; }
+    if ((stop - at == 2i64) && (raw prefix(base, at, "ul", true))) { pass true; }
+    pass false;
+};
+func:raw_block_start = int64(string:base, int64:at, string:tag) never fails {
+    if (!(raw prefix(base, at, tag, true))) { pass 0i64; }
+    int64:b = raw byte_at(base, at + tag.len);
+    if ((raw spacechar(b)) || (b == 62i64)) { pass tag.len + 1i64; }
+    pass 0i64;
+};
+pub func:scan_html_block_start = int64(string:base, int64:at) never fails {
+    if ((raw byte_at(base, at)) != 60i64) { pass 0i64; }
+    if (raw prefix(base, at, "<!--", false)) { pass 4i64; }
+    if (raw prefix(base, at, "<?", false)) { pass 2i64; }
+    if (raw prefix(base, at, "<![CDATA[", false)) { pass 9i64; }
+    if ((raw prefix(base, at, "<!", false)) && (raw alpha(raw byte_at(base, at + 2i64)))) {
+        pass 3i64;
+    }
+    int64:n = raw raw_block_start(base, at + 1i64, "script");
+    if (n == 0i64) { n = raw raw_block_start(base, at + 1i64, "pre"); }
+    if (n == 0i64) { n = raw raw_block_start(base, at + 1i64, "textarea"); }
+    if (n == 0i64) { n = raw raw_block_start(base, at + 1i64, "style"); }
+    if (n > 0i64) { pass n + 1i64; }
+    int64:i = at + 1i64;
+    if ((raw byte_at(base, i)) == 47i64) { i = i + 1i64; }
+    int64:stop = raw tagname_end(base, i);
+    if (!(raw block_tag(base, i, stop))) { pass 0i64; }
+    int64:b = raw byte_at(base, stop);
+    if ((raw spacechar(b)) || (b == 62i64)) { pass stop + 1i64 - at; }
+    if ((b == 47i64) && ((raw byte_at(base, stop + 1i64)) == 62i64)) {
+        pass stop + 2i64 - at;
+    }
+    pass 0i64;
+};
+pub func:scan_html_block_start_7 = int64(string:base, int64:at) never fails {
+    if ((raw byte_at(base, at)) != 60i64) { pass 0i64; }
+    int64:n = raw scan_html_tag(base, at + 1i64);
+    if (n == 0i64) { pass 0i64; }
+    int64:i = at + 1i64 + n;
+    int64:accepted = 0i64;
+    // [\t\n\f ]* [\r\n]: a final LF may be backtracked out of the star.
+    while (i < base.len) decreases base.len - i {
+        int64:b = raw byte_at(base, i);
+        if (b == 13i64) { pass i + 1i64 - at; }
+        if (b == 10i64) { accepted = i + 1i64 - at; }
+        if ((b != 9i64) && (b != 10i64) && (b != 12i64) && (b != 32i64)) { break; }
+        i = i + 1i64;
+    }
+    pass accepted;
+};
