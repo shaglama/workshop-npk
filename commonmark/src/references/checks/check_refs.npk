@@ -7,7 +7,7 @@
 mod:check_refs;
 
 use "../../buffer/cm_buffer.npk".{
-    Buffer, Chunk, buffer_create, buffer_putc, buffer_puts, buffer_detach,
+    Buffer, Chunk, buffer_create, buffer_putc, buffer_puts, buffer_len, buffer_detach,
     chunk_of, chunk_all
 };
 use "../cm_refs.npk".{
@@ -509,6 +509,82 @@ func:test_parse_edge_cases = int32() {
         RefParse:p = relay parse_ref_definition(@m, base, sub);
         if (p.consumed != 12i64) { pass 126i32; }
         if (!(relay expect_hit(m, "foo", "/url", ""))) { pass 127i32; }
+    }
+
+    // Strict sub-chunk fast-path probes: non-def, 4-space indent, 3-space indent, suffix chunk
+    {
+        RefMap:m = relay refmap_new();
+        string:base = "XX   [sp3]: /u3 \"t3\"\n    [sp4]: /u4\nplainYY";
+        Chunk:c_nondef = raw chunk_of(base, 36i64, 5i64);  // "plain"
+        if ((relay parse_ref_definition(@m, base, c_nondef)).consumed != 0i64) { pass 128i32; }
+        Chunk:c_sp4 = raw chunk_of(base, 21i64, 15i64);    // "    [sp4]: /u4\n"
+        if ((relay parse_ref_definition(@m, base, c_sp4)).consumed != 0i64) { pass 129i32; }
+        Chunk:c_sp3 = raw chunk_of(base, 2i64, 19i64);     // "   [sp3]: /u3 \"t3\"\n"
+        if ((relay parse_ref_definition(@m, base, c_sp3)).consumed != 19i64) { pass 130i32; }
+        if (!(relay expect_hit(m, "sp3", "/u3", "t3"))) { pass 131i32; }
+
+        // Suffix chunk (c.off > 0, c.off + c.len == base.len) takes zero-copy path
+        string:s_suf = "LEAD![suf]: /sf \"st\"\n";
+        Chunk:c_suf = raw chunk_of(s_suf, 5i64, s_suf.len - 5i64);
+        if ((relay parse_ref_definition(@m, s_suf, c_suf)).consumed != s_suf.len - 5i64) { pass 132i32; }
+        if (!(relay expect_hit(m, "suf", "/sf", "st"))) { pass 133i32; }
+    }
+
+    // Strict sub-chunk multi-definition isolation: 2 valid defs + 3rd whose closing '"' is outside c
+    {
+        RefMap:m = relay refmap_new();
+        string:base = "AA[a]: /1\n[b]: /2 \"tb\"\n[c]: /3 \"cut\"ZZ";
+        // Chunk covers "[a]: /1\n[b]: /2 \"tb\"\n[c]: /3 \"cut" (off=2, len=33); closing '"' at 35 is outside!
+        Chunk:sub = raw chunk_of(base, 2i64, 33i64);
+        RefParse:p = relay parse_ref_definition(@m, base, sub);
+        if (p.consumed != 21i64) { pass 134i32; }
+        if (!(relay expect_hit(m, "a", "/1", ""))) { pass 135i32; }
+        if (!(relay expect_hit(m, "b", "/2", "tb"))) { pass 136i32; }
+        if (!(relay expect_miss(m, "c"))) { pass 137i32; }
+    }
+
+    // Strict sub-chunk linear-copy scale check: 2500 untitled defs + 500 titled distinct defs
+    // wrapped in prefix/suffix bytes outside the chunk (would copy O(n^2) bytes without single bound).
+    {
+        RefMap:m = relay refmap_new();
+        Buffer:buf1 = relay buffer_create();
+        discard(relay buffer_puts(@buf1, "PREFIX"));
+        int64:k = 0i64;
+        while (k < 2500i64) decreases 2500i64 - k {
+            discard(relay buffer_puts(@buf1, "[x]: /u\n"));
+            k = k + 1i64;
+        }
+        discard(relay buffer_puts(@buf1, "\"OUTSIDE\""));
+        string:s1 = raw buffer_detach(move(buf1));
+        Chunk:sub1 = raw chunk_of(s1, 6i64, 2500i64 * 8i64);
+        RefParse:p1 = relay parse_ref_definition(@m, s1, sub1);
+        if (p1.consumed != 2500i64 * 8i64) { pass 138i32; }
+        if (!(relay expect_hit(m, "x", "/u", ""))) { pass 139i32; }
+
+        RefMap:m2 = relay refmap_new();
+        Buffer:buf2 = relay buffer_create();
+        discard(relay buffer_puts(@buf2, "<<<"));
+        int64:t = 0i64;
+        while (t < 500i64) decreases 500i64 - t {
+            string:num = int_to_string(t);
+            discard(relay buffer_puts(@buf2, "[d"));
+            discard(relay buffer_puts(@buf2, num));
+            discard(relay buffer_puts(@buf2, "]: /u"));
+            discard(relay buffer_puts(@buf2, num));
+            discard(relay buffer_puts(@buf2, " \"t"));
+            discard(relay buffer_puts(@buf2, num));
+            discard(relay buffer_puts(@buf2, "\"\n"));
+            t = t + 1i64;
+        }
+        int64:body_len = (raw buffer_len(buf2)) - 3i64;
+        discard(relay buffer_puts(@buf2, ">>>"));
+        string:s2 = raw buffer_detach(move(buf2));
+        Chunk:sub2 = raw chunk_of(s2, 3i64, body_len);
+        RefParse:p2 = relay parse_ref_definition(@m2, s2, sub2);
+        if (p2.consumed != body_len) { pass 140i32; }
+        if (!(relay expect_hit(m2, "d0", "/u0", "t0"))) { pass 141i32; }
+        if (!(relay expect_hit(m2, "d249", "/u249", "t249"))) { pass 142i32; }
+        if (!(relay expect_hit(m2, "d499", "/u499", "t499"))) { pass 143i32; }
     }
 
     pass 0i32;

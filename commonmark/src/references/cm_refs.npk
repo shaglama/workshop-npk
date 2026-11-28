@@ -476,10 +476,13 @@ func:scan_link_url = UrlScan(string:base, int64:pos, int64:stop) never fails {
     pass UrlScan{ ok: true, consumed: i - pos, url: dest };
 };
 
-// Parse a single link reference definition starting at `start` within [start, stop).
-// If valid, adds it to `m` and returns the bytes consumed (> 0); otherwise 0.
-func:parse_one_ref_def = int64(RefMap->:m, string:base, int64:start, int64:stop) {
+// Parse a single link reference definition starting at `start` within [start, base.len).
+// Caller guarantees `base` ends at the active chunk boundary so `scan_link_title`
+// cannot read past the chunk end. If valid, adds it to `m` and returns the bytes
+// consumed (> 0); otherwise 0.
+func:parse_one_ref_def = int64(RefMap->:m, string:base, int64:start) {
     fixed uint8[]:bs = string_bytes(base);
+    int64:stop = base.len;
     int64:pos = start;
 
     // Optional up to 3 leading ASCII spaces (spec §4.7).
@@ -562,13 +565,7 @@ func:parse_one_ref_def = int64(RefMap->:m, string:base, int64:start, int64:stop)
     Chunk:title_chunk = Chunk{ off: 0i64, len: 0i64 };
 
     if (pos > before_title && pos < stop) {
-        if (stop == base.len) {
-            title_len = raw scan_link_title(base, pos);
-        } else {
-            Chunk:rem_c = Chunk{ off: pos, len: stop - pos };
-            string:rem_s = relay chunk_to_string(base, rem_c);
-            title_len = raw scan_link_title(rem_s, 0i64);
-        }
+        title_len = raw scan_link_title(base, pos);
         if (title_len > 0i64) {
             if (raw has_blank_line(base, pos, title_len)) {
                 title_len = 0i64;
@@ -609,6 +606,19 @@ func:parse_one_ref_def = int64(RefMap->:m, string:base, int64:start, int64:stop)
     pass (pos - start);
 };
 
+// Parse consecutive link reference definitions starting at `start` within [start, src.len).
+// `src` is already bounded at the chunk end, so title scans never copy or read past it.
+func:parse_ref_loop = int64(RefMap->:m, string:src, int64:start) {
+    int64:stop = src.len;
+    int64:cur = start;
+    while (cur < stop) decreases stop - cur {
+        int64:step = relay parse_one_ref_def(m, src, cur);
+        if (step <= 0i64) { break; }
+        cur = cur + step;
+    }
+    pass (cur - start);
+};
+
 // Parse one or more link reference definitions at the start of chunk `c` of
 // `base`, adding each to `m` and returning the total bytes consumed (0 if none).
 pub func:parse_ref_definition = RefParse(RefMap->:m, string:base, Chunk:c) {
@@ -622,11 +632,28 @@ pub func:parse_ref_definition = RefParse(RefMap->:m, string:base, Chunk:c) {
     }
     int64:stop = c.off + len;
 
-    int64:cur = c.off;
-    while (cur < stop) decreases stop - cur {
-        int64:step = relay parse_one_ref_def(m, base, cur, stop);
-        if (step <= 0i64) { break; }
-        cur = cur + step;
+    if (stop == base.len) {
+        int64:consumed_full = relay parse_ref_loop(m, base, c.off);
+        pass RefParse{ consumed: consumed_full };
     }
-    pass RefParse{ consumed: cur - c.off };
+
+    // Strict sub-chunk (stop < base.len): reject chunks that cannot start a
+    // definition (0..3 ASCII spaces + '[') without allocating, then bound the
+    // chunk once for the entire parse so title scans stay O(1) without repeated
+    // O(n^2) suffix copies while preserving strict chunk isolation.
+    fixed uint8[]:bs = string_bytes(base);
+    int64:probe = c.off;
+    int64:indent = 0i64;
+    while (probe < stop && indent < 3i64 && bs[probe] == 32u8) decreases 3i64 - indent {
+        probe = probe + 1i64;
+        indent = indent + 1i64;
+    }
+    if (probe >= stop || bs[probe] != 91u8) {
+        pass RefParse{ consumed: 0i64 };
+    }
+
+    Chunk:bounded_c = Chunk{ off: c.off, len: len };
+    string:bounded = relay chunk_to_string(base, bounded_c);
+    int64:consumed_sub = relay parse_ref_loop(m, bounded, 0i64);
+    pass RefParse{ consumed: consumed_sub };
 };
