@@ -1,0 +1,124 @@
+Compiler commit: 3a45b7c4
+npkc sha256: 23022ef161268018fb83227c8f5f0f26d80917eff715af738c7e7e54a41f90a0
+$ opt-20 --version
+exit: 0
+$ llc-20 --version
+exit: 0
+$ ld.lld-20 --version
+exit: 0
+
+-O0
+$ pin/npkc commonmark/tests/seams/scan/.build-olyut8z2/scan_seam.npk -o commonmark/tests/seams/scan/.build-olyut8z2/scan.ll
+exit: 0
+$ opt-20 -O0 -S commonmark/tests/seams/scan/.build-olyut8z2/scan.ll -o commonmark/tests/seams/scan/.build-olyut8z2/scan.opt.ll
+exit: 0
+$ llc-20 -O0 -filetype=obj -relocation-model=static commonmark/tests/seams/scan/.build-olyut8z2/scan.opt.ll -o commonmark/tests/seams/scan/.build-olyut8z2/scan.o
+exit: 0
+$ ld.lld-20 -static -o commonmark/tests/seams/scan/.build-olyut8z2/scan_seam commonmark/tests/seams/scan/.build-olyut8z2/scan.o pin/npkrt.o
+exit: 0
+$ commonmark/tests/seams/scan/.build-olyut8z2/scan_seam
+exit: 0
+$ pin/npkc commonmark/tests/seams/scan/.build-olyut8z2/scan_seam.npk -o commonmark/tests/seams/scan/.build-olyut8z2/scan.ll
+exit: 0
+$ opt-20 -O0 -S commonmark/tests/seams/scan/.build-olyut8z2/scan.ll -o commonmark/tests/seams/scan/.build-olyut8z2/scan.opt.ll
+exit: 0
+$ llc-20 -O0 -filetype=obj -relocation-model=static commonmark/tests/seams/scan/.build-olyut8z2/scan.opt.ll -o commonmark/tests/seams/scan/.build-olyut8z2/scan.o
+exit: 0
+$ ld.lld-20 -static -o commonmark/tests/seams/scan/.build-olyut8z2/scan_seam commonmark/tests/seams/scan/.build-olyut8z2/scan.o pin/npkrt.o
+exit: 0
+$ commonmark/tests/seams/scan/.build-olyut8z2/scan_seam
+exit: 0
+$ pin/npkc commonmark/tests/seams/scan/.build-olyut8z2/scan_seam.npk -o commonmark/tests/seams/scan/.build-olyut8z2/scan.ll
+exit: 0
+$ opt-20 -O0 -S commonmark/tests/seams/scan/.build-olyut8z2/scan.ll -o commonmark/tests/seams/scan/.build-olyut8z2/scan.opt.ll
+exit: 0
+$ llc-20 -O0 -filetype=obj -relocation-model=static commonmark/tests/seams/scan/.build-olyut8z2/scan.opt.ll -o commonmark/tests/seams/scan/.build-olyut8z2/scan.o
+exit: 0
+$ ld.lld-20 -static -o commonmark/tests/seams/scan/.build-olyut8z2/scan_seam commonmark/tests/seams/scan/.build-olyut8z2/scan.o pin/npkrt.o
+exit: 0
+$ commonmark/tests/seams/scan/.build-olyut8z2/scan_seam
+exit: 0
+$ pin/npkc commonmark/tests/seams/scan/.build-olyut8z2/scan_seam.npk -o commonmark/tests/seams/scan/.build-olyut8z2/scan.ll
+exit: 0
+$ opt-20 -O0 -S commonmark/tests/seams/scan/.build-olyut8z2/scan.ll -o commonmark/tests/seams/scan/.build-olyut8z2/scan.opt.ll
+exit: 0
+$ llc-20 -O0 -filetype=obj -relocation-model=static commonmark/tests/seams/scan/.build-olyut8z2/scan.opt.ll -o commonmark/tests/seams/scan/.build-olyut8z2/scan.o
+exit: 0
+$ ld.lld-20 -static -o commonmark/tests/seams/scan/.build-olyut8z2/scan_seam commonmark/tests/seams/scan/.build-olyut8z2/scan.o pin/npkrt.o
+exit: 0
+$ commonmark/tests/seams/scan/.build-olyut8z2/scan_seam
+exit: 1
+PASS [11] atx heading start: 1-6 hashes then space/tab run or one line end
+PASS [12] setext heading line: a run of = or - , spaces/tabs, one line end; length includes the line end
+PASS [13] open code fence: 3+ backticks or tildes; length is the fence only; line end required after the info
+PASS [14] close code fence: 3+ backticks or tildes, then only spaces/tabs up to a line end
+PASS [15] html block start (types 1-6): the length matched, not a type code; every spec tag name
+PASS [16] html block start 7: a complete open/close tag then spaces and a line end; length includes the line end
+PASS [17] html block end 1-5: greedy to the last terminator on the line; never past a newline
+PASS [18] spacechars: the run of space, tab, VT, FF, CR, LF; 0 when none
+PASS [19] scheme: a letter then 1-31 of letters, digits, + . - and a colon; length includes the colon
+PASS [20] autolink uri (scanned after the '<'): scheme, no space/control/</>, then '>'; length includes '>'
+PASS [21] autolink email (scanned after the '<'): local part, @, hostname labels, '>'
+PASS [22] html tag, open and close tags (scanned after the '<')
+FAIL [23] html comment, processing instruction, declaration, cdata (scanned after the '<')
+PASS [24] link title: quoted by " ' or ( ), escapes, ambiguous closers; length includes the delimiters
+PASS [25] dangerous url: javascript: vbscript: file: data: (not data:image/png|gif|jpeg|webp); length of the scheme and colon
+PASS [26] every scanner: no match on an empty base and at the very end of a base
+
+-O2
+$ pin/npkc commonmark/tests/seams/scan/.build-7gk0pvnl/scan_seam.npk -o commonmark/tests/seams/scan/.build-7gk0pvnl/scan.ll
+exit: 0
+$ opt-20 -O2 -S commonmark/tests/seams/scan/.build-7gk0pvnl/scan.ll -o commonmark/tests/seams/scan/.build-7gk0pvnl/scan.opt.ll
+exit: 0
+$ llc-20 -O2 -filetype=obj -relocation-model=static commonmark/tests/seams/scan/.build-7gk0pvnl/scan.opt.ll -o commonmark/tests/seams/scan/.build-7gk0pvnl/scan.o
+exit: 0
+$ ld.lld-20 -static -o commonmark/tests/seams/scan/.build-7gk0pvnl/scan_seam commonmark/tests/seams/scan/.build-7gk0pvnl/scan.o pin/npkrt.o
+exit: 0
+$ commonmark/tests/seams/scan/.build-7gk0pvnl/scan_seam
+exit: 0
+$ pin/npkc commonmark/tests/seams/scan/.build-7gk0pvnl/scan_seam.npk -o commonmark/tests/seams/scan/.build-7gk0pvnl/scan.ll
+exit: 0
+$ opt-20 -O2 -S commonmark/tests/seams/scan/.build-7gk0pvnl/scan.ll -o commonmark/tests/seams/scan/.build-7gk0pvnl/scan.opt.ll
+exit: 0
+$ llc-20 -O2 -filetype=obj -relocation-model=static commonmark/tests/seams/scan/.build-7gk0pvnl/scan.opt.ll -o commonmark/tests/seams/scan/.build-7gk0pvnl/scan.o
+exit: 0
+$ ld.lld-20 -static -o commonmark/tests/seams/scan/.build-7gk0pvnl/scan_seam commonmark/tests/seams/scan/.build-7gk0pvnl/scan.o pin/npkrt.o
+exit: 0
+$ commonmark/tests/seams/scan/.build-7gk0pvnl/scan_seam
+exit: 0
+$ pin/npkc commonmark/tests/seams/scan/.build-7gk0pvnl/scan_seam.npk -o commonmark/tests/seams/scan/.build-7gk0pvnl/scan.ll
+exit: 0
+$ opt-20 -O2 -S commonmark/tests/seams/scan/.build-7gk0pvnl/scan.ll -o commonmark/tests/seams/scan/.build-7gk0pvnl/scan.opt.ll
+exit: 0
+$ llc-20 -O2 -filetype=obj -relocation-model=static commonmark/tests/seams/scan/.build-7gk0pvnl/scan.opt.ll -o commonmark/tests/seams/scan/.build-7gk0pvnl/scan.o
+exit: 0
+$ ld.lld-20 -static -o commonmark/tests/seams/scan/.build-7gk0pvnl/scan_seam commonmark/tests/seams/scan/.build-7gk0pvnl/scan.o pin/npkrt.o
+exit: 0
+$ commonmark/tests/seams/scan/.build-7gk0pvnl/scan_seam
+exit: 0
+$ pin/npkc commonmark/tests/seams/scan/.build-7gk0pvnl/scan_seam.npk -o commonmark/tests/seams/scan/.build-7gk0pvnl/scan.ll
+exit: 0
+$ opt-20 -O2 -S commonmark/tests/seams/scan/.build-7gk0pvnl/scan.ll -o commonmark/tests/seams/scan/.build-7gk0pvnl/scan.opt.ll
+exit: 0
+$ llc-20 -O2 -filetype=obj -relocation-model=static commonmark/tests/seams/scan/.build-7gk0pvnl/scan.opt.ll -o commonmark/tests/seams/scan/.build-7gk0pvnl/scan.o
+exit: 0
+$ ld.lld-20 -static -o commonmark/tests/seams/scan/.build-7gk0pvnl/scan_seam commonmark/tests/seams/scan/.build-7gk0pvnl/scan.o pin/npkrt.o
+exit: 0
+$ commonmark/tests/seams/scan/.build-7gk0pvnl/scan_seam
+exit: 1
+PASS [11] atx heading start: 1-6 hashes then space/tab run or one line end
+PASS [12] setext heading line: a run of = or - , spaces/tabs, one line end; length includes the line end
+PASS [13] open code fence: 3+ backticks or tildes; length is the fence only; line end required after the info
+PASS [14] close code fence: 3+ backticks or tildes, then only spaces/tabs up to a line end
+PASS [15] html block start (types 1-6): the length matched, not a type code; every spec tag name
+PASS [16] html block start 7: a complete open/close tag then spaces and a line end; length includes the line end
+PASS [17] html block end 1-5: greedy to the last terminator on the line; never past a newline
+PASS [18] spacechars: the run of space, tab, VT, FF, CR, LF; 0 when none
+PASS [19] scheme: a letter then 1-31 of letters, digits, + . - and a colon; length includes the colon
+PASS [20] autolink uri (scanned after the '<'): scheme, no space/control/</>, then '>'; length includes '>'
+PASS [21] autolink email (scanned after the '<'): local part, @, hostname labels, '>'
+PASS [22] html tag, open and close tags (scanned after the '<')
+FAIL [23] html comment, processing instruction, declaration, cdata (scanned after the '<')
+PASS [24] link title: quoted by " ' or ( ), escapes, ambiguous closers; length includes the delimiters
+PASS [25] dangerous url: javascript: vbscript: file: data: (not data:image/png|gif|jpeg|webp); length of the scheme and colon
+PASS [26] every scanner: no match on an empty base and at the very end of a base

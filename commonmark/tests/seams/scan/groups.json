@@ -1,0 +1,18 @@
+{
+ "11": "atx heading start: 1-6 hashes then space/tab run or one line end",
+ "12": "setext heading line: a run of = or - , spaces/tabs, one line end; length includes the line end",
+ "13": "open code fence: 3+ backticks or tildes; length is the fence only; line end required after the info",
+ "14": "close code fence: 3+ backticks or tildes, then only spaces/tabs up to a line end",
+ "15": "html block start (types 1-6): the length matched, not a type code; every spec tag name",
+ "16": "html block start 7: a complete open/close tag then spaces and a line end; length includes the line end",
+ "17": "html block end 1-5: greedy to the last terminator on the line; never past a newline",
+ "18": "spacechars: the run of space, tab, VT, FF, CR, LF; 0 when none",
+ "19": "scheme: a letter then 1-31 of letters, digits, + . - and a colon; length includes the colon",
+ "20": "autolink uri (scanned after the '<'): scheme, no space/control/</>, then '>'; length includes '>'",
+ "21": "autolink email (scanned after the '<'): local part, @, hostname labels, '>'",
+ "22": "html tag, open and close tags (scanned after the '<')",
+ "23": "html comment, processing instruction, declaration, cdata (scanned after the '<')",
+ "24": "link title: quoted by \" ' or ( ), escapes, ambiguous closers; length includes the delimiters",
+ "25": "dangerous url: javascript: vbscript: file: data: (not data:image/png|gif|jpeg|webp); length of the scheme and colon",
+ "26": "every scanner: no match on an empty base and at the very end of a base"
+}
