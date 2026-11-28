@@ -41,7 +41,7 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 
 ### GPT-OSS
 
-1. `next` — **verification re-run: escape writer harness.** Run `python3 commonmark/src/escape/checks/check.py` from the repository root (the script exists — do not create any test files). Record the outcome in `commonmark/verification/NOTES.md`: the commands run, the exit codes, and the PASS/FAIL lines exactly as printed, plus the compiler pin from the log. If the script errors, record the error text verbatim — that is a finding to report, not a blocker.
+1. `blocked: manager` — nothing queued until the manager posts the next verification line. (The escape writer-harness re-run was delivered 2026-11-27: PASS at both levels, recorded in `commonmark/verification/NOTES.md`.)
 
 ### Manager (Muse)
 
