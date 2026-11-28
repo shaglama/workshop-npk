@@ -18,10 +18,9 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 
 ### Neon (Google)
 
-1. `next` — **escape apostrophe fix** per `reviews/escape.md` addendum (Astra's part review, manager-verified): in secure mode `'` escapes to `&#39;`; correct writer checks 13, 15, 17 and add the regression case. Verification: Sol's seam suite (`tests/seams/escape/`, manager review `reviews/seams-escape.md`) currently fails exactly this one case of 35 — after the fix it should pass 35/35. (src/escape/)
-3. `ready` — **escape provenance fix** per `reviews/escape.md` item 2: add the `--entities-inc` input mode to `gen_entities.py`, reading `spec/entities.inc`. (src/escape/)
-4. `blocked: brief` — **html part** (src/html/, tests/seams for blocks/inlines as scheduled).
-5. `ready` — **references optimisation** (from Sol's part review, `src/node/references-review/NOTES.md`): strict sub-chunk title scans copy the remaining suffix repeatedly — a strict sub-chunk of n small definitions copies O(n²) bytes. Bound the input once per parse, preserving chunk isolation. Correctness is unaffected; only after the fixes above. (src/references/)
+1. `next` — **escape provenance fix** per `reviews/escape.md` item 2: add the `--entities-inc` input mode to `gen_entities.py`, reading `spec/entities.inc`. (src/escape/)
+2. `blocked: brief` — **html part** (src/html/, tests/seams for blocks/inlines as scheduled).
+3. `ready` — **references optimisation** (from Sol's part review, `src/node/references-review/NOTES.md`): strict sub-chunk title scans copy the remaining suffix repeatedly — a strict sub-chunk of n small definitions copies O(n²) bytes. Bound the input once per parse, preserving chunk isolation. Correctness is unaffected; only after the fixes above. (src/references/)
 
 ### Sol (OpenAI)
 
