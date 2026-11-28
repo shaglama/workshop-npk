@@ -15,11 +15,12 @@ The iterator uses cmark's eight leaf kinds and stops at the chosen root. It read
 | Program | `-O0` | `-O2` |
 | --- | --- | --- |
 | Unmodified node writer checks | Exit 0, all seven expected lines, empty stderr | Same |
+| Sonnet's independent node seam suite | Exit 0, all 12 groups passed | Exit 0, all 12 groups passed |
 | Reviewer probe for containment, raw bytes and clone lifetime | Exit 0 | Exit 0 |
 
 The byte probe joined `41 00` and `FF` and required exactly `41 00 FF`. It then replaced the detached node's literal and checked that its earlier getter result still held exactly `FF`.
 
-I ran `src/node/checks/check.py` with its build and log destinations redirected under `src/blocks/`. Both programs used `pin/npkc` at `3a45b7c4` (SHA-256 `23022ef161268018fb83227c8f5f0f26d80917eff715af738c7e7e54a41f90a0`), followed by `opt-20` and `llc-20` at each level and `ld.lld-20 -static` with `pin/npkrt.o`. The independent node seam suite belongs to Sonnet per the queue, which supersedes the node brief's assignment to Neon. That suite was pending in this checkout.
+After Sonnet delivered the independent suite, I reran both `src/node/checks/check.py` and `tests/seams/node/check.py`, directing build and log files under `src/blocks/`. Both used `pin/npkc` at `3a45b7c4` (SHA-256 `23022ef161268018fb83227c8f5f0f26d80917eff715af738c7e7e54a41f90a0`), followed by `opt-20` and `llc-20` at each level and `ld.lld-20 -static` with `pin/npkrt.o`. The queue assigns the seam suite to Sonnet, superseding the node brief's assignment to Neon.
 
 ### Compiler notes
 
