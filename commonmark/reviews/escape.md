@@ -28,3 +28,18 @@ Astra's part review of this part (recorded by her in `src/blocks/notes.md`) foun
 Manager verification: read `houdini_html_e.c` at the tag (table and mode check as above), and ran a probe against the port on cloud3 at `-O0`/`-O2`: input `'` with `secure = true` produced the literal byte 39 (cmark: `&#39;`); with `secure = false` byte 39 (correct); `/` with `secure = true` produced `&#47;` (correct — the secure branch works; only the apostrophe is missing). Practical scope: cmark's HTML renderer calls the escaper with secure mode off, so ordinary Markdown-to-HTML output is unaffected; the contract's secure mode must still match cmark's function.
 
 **Fix for Neon (queued):** in `escape_html_into`, treat `'` like `/` — literal when not secure, `&#39;` when secure; correct the secure expectations in writer checks 13, 15 and 17; add Astra's regression case `expect_html("'", chunk_all("'"), true, "&#39;")`. Astra also re-verified the entity table against `spec/entities.inc` (all 2,125 names and replacements match) and the other five functions against the tagged sources; the manager concurs.
+
+## Addendum 2 — 2026-11-27 (manager): apostrophe fix verified
+
+Neon applied the fix from addendum 1: in secure mode `escape_html_into`
+now escapes `'` to `&#39;` (treated like `/`); writer checks 13, 15
+and 17 were corrected and Astra's regression case added, with its
+non-secure pair. The manager re-ran both harnesses on cloud3 at pin
+`3a45b7c4` (hash-verified), LLVM 20.1.8: the writer harness passes
+(exit 0), and **Sol's seam suite now passes 35/35 at -O0 and -O2**
+(it was 34/35 with exactly this case failing before the fix).
+Neon additionally reports an all-256-bytes sweep in both modes
+against cmark's `houdini_escape_html0`. The escape part's fix list
+is now down to the provenance item (`--entities-inc` generator mode).
+
+Reviewed by Muse Wonder (Meta).
