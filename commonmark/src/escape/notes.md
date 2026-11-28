@@ -1,9 +1,21 @@
-Queue line done: 1. `next` — **escape apostrophe fix** per `reviews/escape.md` addendum (Astra's part review, manager-verified): in secure mode `'` escapes to `&#39;`; correct writer checks 13, 15, 17 and add the regression case. (src/escape/)
+Queue line done: 1. `next` — **escape provenance fix** per `reviews/escape.md` item 2: add the `--entities-inc` input mode to `gen_entities.py`, reading `spec/entities.inc`. (src/escape/)
 
 # Notes — Part 3: `escape` (module `cm_escape`)
 
 Writer: Neon (Google)
 Compiler pin: `3a45b7c4` (`pin/npkc` sha256 `23022ef161268018fb83227c8f5f0f26d80917eff715af738c7e7e54a41f90a0`, `pin/npkrt.o` sha256 `c8e5033ad17c70f838d567157738a6cc046af0ca3140ad92259fa71f0e747b4e`)
+
+## Provenance fix applied per `reviews/escape.md` item 2
+
+1. **`gen_entities.py`**:
+   - Added `--entities-inc <path>` input mode (`load_from_entities_inc`) that parses cmark 0.31.2's packed `cmark_entities` + `cmark_entity_text` C arrays from `commonmark/spec/entities.inc` (verifying declared array lengths, `ENT_TABLE_SIZE`, byte ranges, slice bounds, UTF-8 decoding, and uniqueness).
+   - Made `commonmark/spec/entities.inc` (relative to `gen_entities.py`, `../../spec/entities.inc`) the default input when no source flag is given, matching `src/utf8/gen_tables.py`.
+   - Kept `--entities-json <path>` and added explicit `--stdlib` in a mutually exclusive argument group.
+2. **`cm_escape_entities.npk`**:
+   - Regenerated from `commonmark/spec/entities.inc` (`python3 commonmark/src/escape/gen_entities.py --entities-inc commonmark/spec/entities.inc`).
+   - Verified byte-for-byte identity between the regenerated file, the default invocation, and `--entities-inc`; diff against `--stdlib` is limited exclusively to the `// Entity data source:` header comment line (all 2,125 entity names, offsets, `ENTITY_CP1`, and `ENTITY_CP2` arrays are unchanged).
+3. **`checks/check.log`**:
+   - Re-ran `python3 commonmark/src/escape/checks/check.py` against the regenerated `cm_escape_entities.npk`: exit 0, all six PASS lines at both `-O0` and `-O2`.
 
 ## Fixes applied per `reviews/escape.md` addendum (Astra's part review)
 
@@ -16,9 +28,11 @@ Compiler pin: `3a45b7c4` (`pin/npkc` sha256 `23022ef161268018fb83227c8f5f0f26d80
 ## Table generation provenance (`cm_escape_entities.npk`)
 
 - `commonmark/src/escape/gen_entities.py` generates `commonmark/src/escape/cm_escape_entities.npk` (never hand-edited).
-- Target reference: cmark `0.31.2` (commit `eec0eeba6d31189fd828314576494566d539b1e3`), `src/entities.inc`, which cmark's `tools/make_entities_inc.py` generates from the WHATWG HTML5 `entities.json` table (all 2,125 semicolon-terminated named character references, name lengths `2..31`, 1 or 2 Unicode scalar values each).
-- Because this workspace has no network access or local cmark checkout, `cm_escape_entities.npk` was generated offline from Python 3.12.3 stdlib `html.entities.html5` (filtering to semicolon-terminated keys: 2,125 entries, 14,004 packed ASCII name bytes, 93 two-codepoint entries).
-- `gen_entities.py --entities-json <path>` also regenerates the table directly from a WHATWG `entities.json` file; verified to produce byte-identical data arrays.
+- Target reference and default source: `commonmark/spec/entities.inc`, copied verbatim from cmark `0.31.2` (commit `eec0eeba6d31189fd828314576494566d539b1e3`, `src/entities.inc` — 2,125 semicolon-terminated HTML5 named character references, name lengths `2..31`, 14,004 packed ASCII name bytes, 93 two-codepoint entries).
+- Input modes supported by `gen_entities.py`:
+  - `--entities-inc <path>` (default: `../../spec/entities.inc`) — parses cmark's packed `cmark_entities` / `cmark_entity_text` tables.
+  - `--entities-json <path>` — parses WHATWG HTML5 `entities.json` directly.
+  - `--stdlib` — reads Python stdlib `html.entities.html5` offline; verified to produce byte-identical data arrays against `commonmark/spec/entities.inc`.
 
 ## Behavioural notes (cmark 0.31.2 fidelity)
 
