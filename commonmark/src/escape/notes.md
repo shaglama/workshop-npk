@@ -1,7 +1,17 @@
+Queue line done: 1. `next` — **escape apostrophe fix** per `reviews/escape.md` addendum (Astra's part review, manager-verified): in secure mode `'` escapes to `&#39;`; correct writer checks 13, 15, 17 and add the regression case. (src/escape/)
+
 # Notes — Part 3: `escape` (module `cm_escape`)
 
 Writer: Neon (Google)
 Compiler pin: `3a45b7c4` (`pin/npkc` sha256 `23022ef161268018fb83227c8f5f0f26d80917eff715af738c7e7e54a41f90a0`, `pin/npkrt.o` sha256 `c8e5033ad17c70f838d567157738a6cc046af0ca3140ad92259fa71f0e747b4e`)
+
+## Fixes applied per `reviews/escape.md` addendum (Astra's part review)
+
+1. **`cm_escape.npk` (`escape_html_into`)**: in secure mode (`secure == true`), ASCII apostrophe `'` (`0x27`, byte `39`) now escapes to `&#39;`, matching cmark 0.31.2's `houdini_html_e.c` (`HTML_ESCAPE_TABLE[0x27] == 3`, `HTML_ESCAPES[3] == "&#39;"`, skipped only when `!secure`). Non-secure mode keeps `'` literal.
+2. **`checks/check_escape.npk` & `checks/check.log`**:
+   - Corrected the `secure = true` expectations in writer checks 13 (`'single'` → `&#39;single&#39;`), 15 (`a/b'c` → `a&#47;b&#39;c`), and 17 (`"&/<>'` → `&quot;&amp;&#47;&lt;&gt;&#39;`).
+   - Added Astra's regression case `expect_html("'", raw chunk_all("'"), true, "&#39;")` (and paired non-secure check `expect_html("'", raw chunk_all("'"), false, "'")`).
+   - Re-ran `commonmark/src/escape/checks/check.py` at `-O0` and `-O2` and verified an all-256-bytes sweep (`0x00..0xFF`) for `escape_html_into` in both `secure = false` and `secure = true` modes against cmark 0.31.2's `houdini_escape_html0` at `-O0` and `-O2`.
 
 ## Table generation provenance (`cm_escape_entities.npk`)
 
@@ -12,7 +22,7 @@ Compiler pin: `3a45b7c4` (`pin/npkc` sha256 `23022ef161268018fb83227c8f5f0f26d80
 
 ## Behavioural notes (cmark 0.31.2 fidelity)
 
-- **`escape_html_into`** (`src/houdini_html_e.c`, `houdini_escape_html0`): escapes `"` (`&quot;`), `&` (`&amp;`), `<` (`&lt;`), `>` (`&gt;`). When `secure` is `true`, also escapes `/` as `&#47;` (when `false`, `/` passes through). Single quote `'` passes through unchanged in both modes, matching cmark 0.31.2's `HTML_ESCAPE_TABLE[0x27] == 0`.
+- **`escape_html_into`** (`src/houdini_html_e.c`, `houdini_escape_html0`): escapes `"` (`&quot;`), `&` (`&amp;`), `<` (`&lt;`), `>` (`&gt;`). When `secure` is `true`, also escapes `'` (`&#39;`) and `/` (`&#47;`); when `secure` is `false`, `'` and `/` pass through unchanged, matching cmark 0.31.2's `HTML_ESCAPE_TABLE` and `!secure` check.
 - **`escape_href_into`** (`src/houdini_href_e.c`, `houdini_escape_href`): copies the 81 bytes marked `1` in cmark's `HREF_SAFE` table (`!#$%()*+,-./0-9:;=?@A-Z_a-z~`) verbatim, escapes `&` as `&amp;` and `'` as `&#x27;`, and percent-encodes every other byte (`0x00..0x20`, `"`, `<`, `>`, `[`, `\`, `]`, `^`, `` ` ``, `{`, `|`, `}`, `0x7F..0xFF`) as uppercase `%XX`. Existing `%` sequences are preserved without double-escaping, matching cmark 0.31.2.
 - **`unescape_entities_into`** (`src/houdini_html_u.c`, `houdini_unescape_html_f` / `houdini_unescape_ent`):
   - Named entities: binary search over the 2,125 sorted HTML5 names (`2..31` ASCII alphanumeric chars followed by `;`), case-sensitive, encoded via `cm_utf8.utf8_encode`.

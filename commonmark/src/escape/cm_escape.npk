@@ -191,7 +191,7 @@ func:unescape_ent = int64(Buffer->:buf, string:base, int64:start, int64:hi) {
 };
 
 // Append chunk `c` of `base` with & < > " escaped; when `secure` is true, also
-// escape '/' as "&#47;" per cmark 0.31.2's houdini_escape_html0.
+// escape '\'' as "&#39;" and '/' as "&#47;" per cmark 0.31.2's houdini_escape_html0.
 pub func:escape_html_into = NIL(Buffer->:buf, string:base, Chunk:c, bool:secure) {
     if (c.off < 0i64 || c.len <= 0i64 || c.off >= base.len) {
         pass NIL;
@@ -209,7 +209,7 @@ pub func:escape_html_into = NIL(Buffer->:buf, string:base, Chunk:c, bool:secure)
     while (i < hi) decreases hi - i {
         uint8:b = bs[i];
         bool:is_esc = (b == 34u8 || b == 38u8 || b == 60u8 || b == 62u8
-                    || (secure && b == 47u8));
+                    || (secure && (b == 39u8 || b == 47u8)));
         if (is_esc) {
             if (i > run_start) {
                 Chunk:run = Chunk{ off: run_start, len: i - run_start };
@@ -219,6 +219,8 @@ pub func:escape_html_into = NIL(Buffer->:buf, string:base, Chunk:c, bool:secure)
                 discard(relay buffer_puts(buf, "&quot;"));
             } else if (b == 38u8) {
                 discard(relay buffer_puts(buf, "&amp;"));
+            } else if (b == 39u8) {
+                discard(relay buffer_puts(buf, "&#39;"));
             } else if (b == 60u8) {
                 discard(relay buffer_puts(buf, "&lt;"));
             } else if (b == 62u8) {

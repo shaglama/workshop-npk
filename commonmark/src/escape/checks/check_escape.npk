@@ -63,20 +63,25 @@ func:test_escape_html = int32() {
     if (!(relay expect_html("", raw chunk_all(""), false, ""))) { pass 10i32; }
     if (!(relay expect_html("", raw chunk_all(""), true, ""))) { pass 11i32; }
     string:plain = "Hello, World! 12345 'single'";
+    string:plain_sec = "Hello, World! 12345 &#39;single&#39;";
     if (!(relay expect_html(plain, raw chunk_all(plain), false, plain))) { pass 12i32; }
-    if (!(relay expect_html(plain, raw chunk_all(plain), true, plain))) { pass 13i32; }
+    if (!(relay expect_html(plain, raw chunk_all(plain), true, plain_sec))) { pass 13i32; }
 
-    // Standard HTML characters: & < > " and / (only in secure mode)
+    // Standard HTML characters: & < > ", plus ' and / (only in secure mode)
     string:s1 = "<a href=\"x&y\">a/b'c</a>";
     string:e1_norm = "&lt;a href=&quot;x&amp;y&quot;&gt;a/b'c&lt;/a&gt;";
-    string:e1_sec = "&lt;a href=&quot;x&amp;y&quot;&gt;a&#47;b'c&lt;&#47;a&gt;";
+    string:e1_sec = "&lt;a href=&quot;x&amp;y&quot;&gt;a&#47;b&#39;c&lt;&#47;a&gt;";
     if (!(relay expect_html(s1, raw chunk_all(s1), false, e1_norm))) { pass 14i32; }
     if (!(relay expect_html(s1, raw chunk_all(s1), true, e1_sec))) { pass 15i32; }
 
     // All escaped chars consecutively
     string:s2 = "\"&/<>'";
     if (!(relay expect_html(s2, raw chunk_all(s2), false, "&quot;&amp;/&lt;&gt;'"))) { pass 16i32; }
-    if (!(relay expect_html(s2, raw chunk_all(s2), true, "&quot;&amp;&#47;&lt;&gt;'"))) { pass 17i32; }
+    if (!(relay expect_html(s2, raw chunk_all(s2), true, "&quot;&amp;&#47;&lt;&gt;&#39;"))) { pass 17i32; }
+
+    // Regression (reviews/escape.md addendum): apostrophe in secure vs non-secure mode
+    if (!(relay expect_html("'", raw chunk_all("'"), true, "&#39;"))) { pass 105i32; }
+    if (!(relay expect_html("'", raw chunk_all("'"), false, "'"))) { pass 106i32; }
 
     // UTF-8 and raw bytes (including NUL and 0xFF) pass through verbatim
     fixed int64[5]:raw_bs = [97i64, 0i64, 38i64, 255i64, 98i64];
