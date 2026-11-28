@@ -131,101 +131,108 @@ pub func:utf8_encode = NIL(int64:cp, Buffer->:buf) {
 };
 
 // Validate one UTF-8 sequence starting at `base[idx]` with `rem >= 1` bytes available.
-// Matches cmark's `valid_utf8`:
+// Matches cmark 0.31.2's `utf8proc_valid` (src/utf8.c):
 //   - Returns 1..4 if a valid non-NUL UTF-8 sequence starts at `idx`.
-//   - Returns -1, -2, or -3 (negative maximal subpart length) for NUL (0x00)
-//     or any ill-formed UTF-8 byte sequence.
+//   - Returns -1..-4 (negative number of bytes consumed by one U+FFFD replacement):
+//       1. Invalid leading byte (0x80..0xBF, 0xF8..0xFF): -1.
+//       2. Truncated sequence (nominal length > rem): -rem (consumes all remaining bytes).
+//       3. ASCII NUL (0x00): -1.
+//       4. Bad continuation byte at position i (1..length-1): -i.
+//       5. Scalar restrictions (overlong, UTF-16 surrogate, > U+10FFFF): -length.
 func:valid_utf8_len = int64(string:base, int64:idx, int64:rem) never fails {
     fixed uint8[]:bs = string_bytes(base);
     int64:b0 = bs[idx] => int64;
 
-    // ASCII NUL (0x00) is rejected for security reasons (CommonMark spec / cmark).
-    if (b0 == 0i64) {
+    // Nominal UTF-8 sequence length matching cmark's utf8proc_utf8class[256]:
+    //   0x00..0x7F -> 1
+    //   0x80..0xBF -> 0 (invalid start byte)
+    //   0xC0..0xDF -> 2
+    //   0xE0..0xEF -> 3
+    //   0xF0..0xF7 -> 4
+    //   0xF8..0xFF -> 0 (invalid start byte)
+    int64:length = 0i64;
+    if (b0 < 128i64) {
+        length = 1i64;
+    } else if (b0 >= 192i64 && b0 <= 223i64) {
+        length = 2i64;
+    } else if (b0 >= 224i64 && b0 <= 239i64) {
+        length = 3i64;
+    } else if (b0 >= 240i64 && b0 <= 247i64) {
+        length = 4i64;
+    }
+
+    if (length == 0i64) {
         pass (0i64 - 1i64);
     }
-    if (b0 < 128i64) {
+    if (length > rem) {
+        pass (0i64 - rem);
+    }
+
+    if (length == 1i64) {
+        // ASCII NUL (0x00) is replaced with U+FFFD (CommonMark spec / cmark).
+        if (b0 == 0i64) {
+            pass (0i64 - 1i64);
+        }
         pass 1i64;
     }
 
-    // 2-byte sequence: 0xC2..0xDF
-    if (b0 >= 194i64 && b0 <= 223i64) {
-        if (rem < 2i64) {
+    if (length == 2i64) {
+        int64:b1 = bs[idx + 1i64] => int64;
+        if ((b1 & 192i64) != 128i64) {
             pass (0i64 - 1i64);
         }
-        int64:b1 = bs[idx + 1i64] => int64;
-        if (b1 >= 128i64 && b1 <= 191i64) {
-            pass 2i64;
+        if (b0 < 194i64) {
+            pass (0i64 - 2i64);
         }
-        pass (0i64 - 1i64);
+        pass 2i64;
     }
 
-    // 3-byte sequence: 0xE0..0xEF
-    if (b0 >= 224i64 && b0 <= 239i64) {
-        if (rem < 2i64) {
-            pass (0i64 - 1i64);
-        }
+    if (length == 3i64) {
         int64:b1 = bs[idx + 1i64] => int64;
-        bool:b1_ok = false;
-        if (b0 == 224i64) {
-            b1_ok = (b1 >= 160i64 && b1 <= 191i64);
-        } else if (b0 == 237i64) {
-            b1_ok = (b1 >= 128i64 && b1 <= 159i64);
-        } else {
-            b1_ok = (b1 >= 128i64 && b1 <= 191i64);
-        }
-        if (!b1_ok) {
+        if ((b1 & 192i64) != 128i64) {
             pass (0i64 - 1i64);
-        }
-        if (rem < 3i64) {
-            pass (0i64 - 2i64);
         }
         int64:b2 = bs[idx + 2i64] => int64;
-        if (b2 >= 128i64 && b2 <= 191i64) {
-            pass 3i64;
-        }
-        pass (0i64 - 2i64);
-    }
-
-    // 4-byte sequence: 0xF0..0xF4
-    if (b0 >= 240i64 && b0 <= 244i64) {
-        if (rem < 2i64) {
-            pass (0i64 - 1i64);
-        }
-        int64:b1 = bs[idx + 1i64] => int64;
-        bool:b1_ok = false;
-        if (b0 == 240i64) {
-            b1_ok = (b1 >= 144i64 && b1 <= 191i64);
-        } else if (b0 == 244i64) {
-            b1_ok = (b1 >= 128i64 && b1 <= 143i64);
-        } else {
-            b1_ok = (b1 >= 128i64 && b1 <= 191i64);
-        }
-        if (!b1_ok) {
-            pass (0i64 - 1i64);
-        }
-        if (rem < 3i64) {
+        if ((b2 & 192i64) != 128i64) {
             pass (0i64 - 2i64);
         }
-        int64:b2 = bs[idx + 2i64] => int64;
-        if (b2 < 128i64 || b2 > 191i64) {
-            pass (0i64 - 2i64);
-        }
-        if (rem < 4i64) {
+        if (b0 == 224i64 && b1 < 160i64) {
             pass (0i64 - 3i64);
         }
-        int64:b3 = bs[idx + 3i64] => int64;
-        if (b3 >= 128i64 && b3 <= 191i64) {
-            pass 4i64;
+        if (b0 == 237i64 && b1 >= 160i64) {
+            pass (0i64 - 3i64);
         }
-        pass (0i64 - 3i64);
+        pass 3i64;
     }
 
-    pass (0i64 - 1i64);
+    // length == 4
+    int64:b1 = bs[idx + 1i64] => int64;
+    if ((b1 & 192i64) != 128i64) {
+        pass (0i64 - 1i64);
+    }
+    int64:b2 = bs[idx + 2i64] => int64;
+    if ((b2 & 192i64) != 128i64) {
+        pass (0i64 - 2i64);
+    }
+    int64:b3 = bs[idx + 3i64] => int64;
+    if ((b3 & 192i64) != 128i64) {
+        pass (0i64 - 3i64);
+    }
+    if (b0 == 240i64 && b1 < 144i64) {
+        pass (0i64 - 4i64);
+    }
+    if (b0 == 244i64 && b1 >= 144i64) {
+        pass (0i64 - 4i64);
+    }
+    if (b0 > 244i64) {
+        pass (0i64 - 4i64);
+    }
+    pass 4i64;
 };
 
 // Append chunk `c` of `base` into `buf`, replacing NUL (0x00) and every ill-formed
-// UTF-8 sequence (per Unicode maximal-subpart rule, matching cmark_utf8proc_check)
-// with U+FFFD (\xEF\xBF\xBD).
+// UTF-8 sequence (matching cmark 0.31.2's `cmark_utf8proc_check` / `utf8proc_valid`
+// byte consumption) with U+FFFD (\xEF\xBF\xBD).
 pub func:utf8_check = NIL(string:base, Chunk:c, Buffer->:buf) {
     if (c.off < 0i64 || c.len <= 0i64 || c.off >= base.len) {
         pass NIL;

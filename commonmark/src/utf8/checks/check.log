@@ -62,7 +62,25 @@ PASS: utf8_case_fold
 ALL cm_utf8 CHECKS PASSED
 ```
 
-## 3. Exhaustive Unicode scalar sweep (`0x0000..0x10FFFF`)
+## 3. `utf8_check` cmark-validator differential check (`18,352` cases)
+
+Verified `utf8_check` against an independent Python implementation of cmark 0.31.2's `utf8proc_utf8class` / `utf8proc_valid` / `cmark_utf8proc_check` across all 256 1-byte inputs, 529 2-byte critical combinations, 12,167 3-byte critical combinations, and 5,400 4-byte/5-byte combinations sliced at nonzero chunk offset `1` inside framed buffers:
+
+```
+ORACLE:  count=18352 hash=1605621866
+NPK -O0: exit=0
+NPK -O2: exit=0
+```
+
+## 4. Existing seam suite confirmation (`commonmark/tests/seams/utf8/check.py`)
+
+```
+python3 commonmark/tests/seams/utf8/check.py
+```
+
+Exit 0: all 12 seam test groups passed at both `-O0` and `-O2`.
+
+## 5. Exhaustive Unicode scalar sweep (`0x0000..0x10FFFF`, tables unchanged)
 
 Verified `utf8_is_space`, `utf8_is_punct` (count and FNV-1a 64-bit hash over all matching code points), `utf8_encode` -> `utf8_iterate` round-trip, and `utf8_case_fold` (count and FNV-1a 64-bit hash over all changed code points and folded UTF-8 bytes) across all 1,114,112 code points (1,112,064 valid Unicode scalars) against the real `commonmark/src/buffer/cm_buffer.npk` and an independent Python oracle reading `commonmark/spec/case_fold.inc` (Unicode 16, 1,559 non-ASCII + 26 ASCII = 1,585 folds) and Unicode 15.0.0 P/S (matching cmark 0.31.2's `src/utf8.c`: 8,580 non-ASCII + 32 ASCII = 8,612 code points, excluding `U+2FFC..U+2FFF` and `U+31EF`):
 

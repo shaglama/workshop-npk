@@ -1,11 +1,25 @@
-Queue line done: 1. `next` — **utf8 fixes** per `reviews/utf8.md`: harness on the real `cm_buffer` (`buffer_create`) with a refreshed `check.log` from the real tree; regenerate both tables from `spec/case_fold.inc` and cmark's `utf8.c` via the new `--case-fold-inc` mode. (src/utf8/)
+Queue line done: 1. `next` — **utf8 grouping fix** per `reviews/utf8.md` addendum 2 (Sol's part review, manager-verified): match cmark's validator byte consumption in `utf8_check` (truncated sequence consumes all remaining bytes; scalar restrictions consume the whole nominal sequence), and update the writer harness expectations that encode the old grouping. `utf8_iterate` does not change. (src/utf8/)
 
 # Notes — Part 2: `utf8` (module `cm_utf8`)
 
 Writer: Neon (Google)
 Compiler pin: `3a45b7c4` (`pin/npkc` sha256 `23022ef161268018fb83227c8f5f0f26d80917eff715af738c7e7e54a41f90a0`)
 
-## Fixes applied per `reviews/utf8.md`
+## Fixes applied per `reviews/utf8.md` addendum 2 (Sol's part review)
+
+1. **`cm_utf8.npk` (`valid_utf8_len` / `utf8_check`)**: replaced the Unicode maximal-subpart check order with cmark 0.31.2's `utf8proc_valid` (`src/utf8.c`) order:
+   - Nominal sequence width from `utf8proc_utf8class` (`0x00..0x7F` → 1, `0xC0..0xDF` → 2, `0xE0..0xEF` → 3, `0xF0..0xF7` → 4, `0x80..0xBF` and `0xF8..0xFF` → 0 / `-1`).
+   - Truncated check first: if `length > rem`, return `-rem` (consumes all remaining bytes in the chunk as one `U+FFFD`).
+   - NUL (`0x00`) returns `-1`.
+   - Continuation bytes checked in order (`1..length-1`): first non-continuation byte at index `i` returns `-i`.
+   - Scalar restrictions checked last (overlong `0xC0..0xC1`, `0xE0 < 0xA0`, `0xF0 < 0x90`; UTF-16 surrogates `0xED >= 0xA0`; above `U+10FFFF` via `0xF4 >= 0x90` or `0xF5..0xF7`): returns `-length` (consumes the entire nominal sequence as one `U+FFFD`).
+   - `utf8_iterate`, `utf8_case_fold`, and `cm_utf8_tables.npk` were not changed.
+2. **`checks/check_utf8.npk` & `checks/check.log`**:
+   - Updated the `utf8_check` expectations for `C0 AF`, `ED A0 80`, and `F4 90 80 80` to expect 1 × `U+FFFD` (matching cmark 0.31.2).
+   - Added regression checks for `F5 80 80 80`, `E0 9F BF`, `F0 8F BF BF`, `E2 41` at chunk end, `E0 80 41`, `E2 41 42`, `F5 41 42 43`, `F8 80 80 80`, and short nominal sequences at nonzero chunk offsets (`[0xFF, 'a', 0xE2, 'A', 0x80, 0xFF]` sliced at `[1..4)` and `[0x61, 0xE2, 0x82, 0xAC, 0x62]` sliced at `[1..3)`).
+   - Re-ran `check_utf8.npk` at `-O0` and `-O2`, verified `utf8_check` across 18,352 critical 1–5 byte / nonzero-offset cases against cmark 0.31.2's `utf8proc_valid`/`cmark_utf8proc_check` at `-O0` and `-O2`, and confirmed Sonnet's seam suite (`commonmark/tests/seams/utf8/check.py`) passes all 12 groups at `-O0` and `-O2`.
+
+## Earlier fixes applied per `reviews/utf8.md` (addendum 1)
 
 1. **`checks/check_utf8.npk` & `checks/check.log`**: updated `buffer_new` → `buffer_create` throughout (import and all call sites; PR #3 landed the contract rename) and added regression checks for the Unicode 16 case-fold entries (`U+1C89`, `U+A7CB`, `U+A7DC`, `U+10D50`) and the 5 Unicode 15.1 P/S boundary code points absent from cmark 0.31.2 (`U+2FFC..U+2FFF`, `U+31EF`, alongside `U+2FFB`). Built and ran directly against the real `commonmark/src/buffer/cm_buffer.npk` at `-O0` and `-O2` (no stub), and refreshed `checks/check.log`.
 2. **`gen_tables.py` & `cm_utf8_tables.npk`**:
@@ -25,7 +39,7 @@ Compiler pin: `3a45b7c4` (`pin/npkc` sha256 `23022ef161268018fb83227c8f5f0f26d80
 
 - `utf8_iterate`: decodes valid RFC 3629 sequences (1–4 bytes, rejecting overlong encodings, UTF-16 surrogates `U+D800..U+DFFF`, and values `> U+10FFFF`; accepting `U+FFFE` and `U+FFFF` per cmark #548). Returns `{ 0xFFFD, 1 }` on any invalid/truncated byte sequence and `{ 0, 0 }` when `pos < 0` or `pos >= c.len`.
 - `utf8_encode`: encodes valid scalars (including `U+0000`, `U+FFFE`, `U+FFFF`) as 1–4 UTF-8 bytes; invalid scalars (`< 0`, surrogates, `> U+10FFFF`) encode as `U+FFFD`.
-- `utf8_check`: follows cmark's `cmark_utf8proc_check` / `valid_utf8`: replaces `U+0000` (NUL, per CommonMark spec §2.3) and each maximal subpart of an ill-formed UTF-8 sequence with one `U+FFFD` (`\xEF\xBF\xBD`), batching valid runs through `buffer_put`.
+- `utf8_check`: follows cmark 0.31.2's `cmark_utf8proc_check` / `utf8proc_valid`: replaces `U+0000` (NUL, per CommonMark spec §2.3) and every invalid UTF-8 sequence with one `U+FFFD` (`\xEF\xBF\xBD`), consuming `-rem` on truncated nominal sequences, `-i` on the first invalid continuation byte, and `-length` on overlong / surrogate / above-maximum sequences, while batching valid runs through `buffer_put`.
 - `utf8_is_space`: exact 21 code points matching CommonMark / `cmark_utf8proc_is_space` (`Zs` + `0x09`, `0x0A`, `0x0C`, `0x0D`; excluding `0x0B` `\v`, `0x85`, `0x180E`, `0x200B`, `0xFEFF`).
 - `utf8_is_punct`: Unicode `P*` and `S*` categories matching cmark 0.31.2's `cmark_utf8proc_is_punctuation_or_symbol`.
 - `utf8_case_fold`: full Unicode case folding (status C + F) matching cmark 0.31.2's `src/case_fold.inc` with 1-, 2-, and 3-codepoint expansions; invalid UTF-8 bytes become `U+FFFD` and advance by 1 byte, matching `cmark_utf8proc_case_fold`.

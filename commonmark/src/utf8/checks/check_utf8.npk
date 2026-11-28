@@ -261,45 +261,99 @@ func:test_check = int32() {
     string:bad1 = relay mk_bytes(bad1_bs[0i64...3i64]);
     if (!(relay expect_check(bad1, raw chunk_all(bad1), exp_a_fffd_b))) { pass 83i32; }
 
-    // Overlong 2-byte C0 AF: each byte is a maximal subpart of length 1 -> two U+FFFD
+    // Overlong 2-byte C0 AF: cmark utf8proc_valid consumes the whole 2-byte nominal sequence -> one U+FFFD
     fixed int64[2]:ov2_bs = [192i64, 175i64];
     string:ov2 = relay mk_bytes(ov2_bs[0i64...2i64]);
-    string:fffd2 = string_concat(fffd, fffd);
-    if (!(relay expect_check(ov2, raw chunk_all(ov2), fffd2))) { pass 84i32; }
+    if (!(relay expect_check(ov2, raw chunk_all(ov2), fffd))) { pass 84i32; }
 
-    // Surrogate U+D800 (ED A0 80): three maximal subparts of length 1 -> three U+FFFD
+    // Surrogate U+D800 (ED A0 80): consumes whole 3-byte nominal sequence -> one U+FFFD
     fixed int64[3]:sur_bs = [237i64, 160i64, 128i64];
     string:sur = relay mk_bytes(sur_bs[0i64...3i64]);
-    string:fffd3 = string_concat(fffd2, fffd);
-    if (!(relay expect_check(sur, raw chunk_all(sur), fffd3))) { pass 85i32; }
+    if (!(relay expect_check(sur, raw chunk_all(sur), fffd))) { pass 85i32; }
 
-    // Truncated 3-byte with valid 2-byte prefix + ASCII (E2 82 'a'): ONE U+FFFD then 'a'
+    // Truncated 3-byte with valid 2-byte prefix + ASCII (E2 82 'a'): bad 3rd byte -> -2 -> ONE U+FFFD then 'a'
     fixed int64[3]:tr3_bs = [226i64, 130i64, 97i64];
     string:tr3 = relay mk_bytes(tr3_bs[0i64...3i64]);
     string:fffd_a = string_concat(fffd, "a");
     if (!(relay expect_check(tr3, raw chunk_all(tr3), fffd_a))) { pass 86i32; }
 
-    // Truncated 4-byte with valid 3-byte prefix + ASCII (F0 9F 98 'a'): ONE U+FFFD then 'a'
+    // Truncated 4-byte with valid 3-byte prefix + ASCII (F0 9F 98 'a'): bad 4th byte -> -3 -> ONE U+FFFD then 'a'
     fixed int64[4]:tr4_bs = [240i64, 159i64, 152i64, 97i64];
     string:tr4 = relay mk_bytes(tr4_bs[0i64...4i64]);
     if (!(relay expect_check(tr4, raw chunk_all(tr4), fffd_a))) { pass 87i32; }
 
-    // Truncated 4-byte at end of input (F0 9F 98): ONE U+FFFD
+    // Truncated 4-byte at end of input (F0 9F 98): length 4 > rem 3 -> -3 -> ONE U+FFFD
     fixed int64[3]:tr4end_bs = [240i64, 159i64, 152i64];
     string:tr4end = relay mk_bytes(tr4end_bs[0i64...3i64]);
     if (!(relay expect_check(tr4end, raw chunk_all(tr4end), fffd))) { pass 88i32; }
 
-    // Out of range > U+10FFFF (F4 90 80 80): four U+FFFD
+    // Out of range > U+10FFFF (F4 90 80 80 and F5 80 80 80): whole 4-byte nominal sequence -> one U+FFFD
     fixed int64[4]:hi4_bs = [244i64, 144i64, 128i64, 128i64];
     string:hi4 = relay mk_bytes(hi4_bs[0i64...4i64]);
+    if (!(relay expect_check(hi4, raw chunk_all(hi4), fffd))) { pass 89i32; }
+
+    fixed int64[4]:hi5_bs = [245i64, 128i64, 128i64, 128i64];
+    string:hi5 = relay mk_bytes(hi5_bs[0i64...4i64]);
+    if (!(relay expect_check(hi5, raw chunk_all(hi5), fffd))) { pass 91i32; }
+
+    // Overlong 3-byte (E0 9F BF) and overlong 4-byte (F0 8F BF BF): whole nominal sequence -> one U+FFFD
+    fixed int64[3]:ov3_bs = [224i64, 159i64, 191i64];
+    string:ov3 = relay mk_bytes(ov3_bs[0i64...3i64]);
+    if (!(relay expect_check(ov3, raw chunk_all(ov3), fffd))) { pass 92i32; }
+
+    fixed int64[4]:ov4_bs = [240i64, 143i64, 191i64, 191i64];
+    string:ov4 = relay mk_bytes(ov4_bs[0i64...4i64]);
+    if (!(relay expect_check(ov4, raw chunk_all(ov4), fffd))) { pass 93i32; }
+
+    // Short nominal sequence at chunk end (E2 41): length 3 > rem 2 -> -2 -> U+FFFD alone
+    fixed int64[2]:short3_bs = [226i64, 65i64];
+    string:short3 = relay mk_bytes(short3_bs[0i64...2i64]);
+    if (!(relay expect_check(short3, raw chunk_all(short3), fffd))) { pass 94i32; }
+
+    // Continuation checked before scalar restriction (E0 80 41): b1=0x80 is continuation, b2='A' is not -> -2 -> U+FFFD + 'A'
+    fixed int64[3]:ov3_bad2_bs = [224i64, 128i64, 65i64];
+    string:ov3_bad2 = relay mk_bytes(ov3_bad2_bs[0i64...3i64]);
+    string:fffd_A = string_concat(fffd, "A");
+    if (!(relay expect_check(ov3_bad2, raw chunk_all(ov3_bad2), fffd_A))) { pass 95i32; }
+
+    // Contrast: E2 41 42 has rem=3 >= 3, b1='A' fails continuation -> -1 -> U+FFFD + "AB"
+    fixed int64[3]:bad1_3_bs = [226i64, 65i64, 66i64];
+    string:bad1_3 = relay mk_bytes(bad1_3_bs[0i64...3i64]);
+    string:fffd_AB = string_concat(fffd, "AB");
+    if (!(relay expect_check(bad1_3, raw chunk_all(bad1_3), fffd_AB))) { pass 96i32; }
+
+    // Class-4 lead > 0xF4 with non-continuation b1 (F5 41 42 43): continuation checked first -> -1 -> U+FFFD + "ABC"
+    fixed int64[4]:f5_bad1_bs = [245i64, 65i64, 66i64, 67i64];
+    string:f5_bad1 = relay mk_bytes(f5_bad1_bs[0i64...4i64]);
+    string:fffd_ABC = string_concat(fffd, "ABC");
+    if (!(relay expect_check(f5_bad1, raw chunk_all(f5_bad1), fffd_ABC))) { pass 97i32; }
+
+    // Invalid lead byte 0xF8 (class 0) followed by 3 continuations -> four U+FFFD
+    fixed int64[4]:f8_bs = [248i64, 128i64, 128i64, 128i64];
+    string:f8 = relay mk_bytes(f8_bs[0i64...4i64]);
+    string:fffd2 = string_concat(fffd, fffd);
     string:fffd4 = string_concat(fffd2, fffd2);
-    if (!(relay expect_check(hi4, raw chunk_all(hi4), fffd4))) { pass 89i32; }
+    if (!(relay expect_check(f8, raw chunk_all(f8), fffd4))) { pass 98i32; }
 
     // Non-zero chunk offset: repair only bytes inside the chunk
     fixed int64[7]:fr_bs = [255i64, 97i64, 98i64, 128i64, 99i64, 100i64, 255i64];
     string:framed = relay mk_bytes(fr_bs[0i64...7i64]);
     string:exp_fr = string_concat(string_concat("ab", fffd), "cd");
     if (!(relay expect_check(framed, raw chunk_of(framed, 1i64, 5i64), exp_fr))) { pass 90i32; }
+
+    // Short nominal sequence at a nonzero chunk offset:
+    // base = [0xFF, 'a', 0xE2, 'A', 0x80, 0xFF]; chunk [1..4) = ['a', 0xE2, 'A'].
+    // At 'a' -> 'a'; at 0xE2, rem inside chunk is 2 < 3 (must not peek at base[4]=0x80) -> -2 -> "a" + U+FFFD.
+    fixed int64[6]:fr_short_bs = [255i64, 97i64, 226i64, 65i64, 128i64, 255i64];
+    string:fr_short = relay mk_bytes(fr_short_bs[0i64...6i64]);
+    string:a_fffd = string_concat("a", fffd);
+    if (!(relay expect_check(fr_short, raw chunk_of(fr_short, 1i64, 3i64), a_fffd))) { pass 99i32; }
+
+    // Valid 3-byte sequence (€ = E2 82 AC) cut short by a nonzero chunk boundary:
+    // base = ['a', 0xE2, 0x82, 0xAC, 'b']; chunk [1..3) = [0xE2, 0x82] -> rem 2 < 3 -> one U+FFFD.
+    fixed int64[5]:fr_cut_bs = [97i64, 226i64, 130i64, 172i64, 98i64];
+    string:fr_cut = relay mk_bytes(fr_cut_bs[0i64...5i64]);
+    if (!(relay expect_check(fr_cut, raw chunk_of(fr_cut, 1i64, 2i64), fffd))) { pass 102i32; }
 
     pass 0i32;
 };
