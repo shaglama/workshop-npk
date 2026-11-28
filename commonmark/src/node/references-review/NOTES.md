@@ -78,6 +78,11 @@ PASS: parse_ref_definition edge cases & sub-chunks
 ALL cm_refs CHECKS PASSED
 ```
 
+The handback verification re-ran the writer harness against the current
+checkout with the same pin and LLVM/LLD versions. All six groups passed
+at both optimization levels. Each binary exited 0 with empty stderr,
+and the temporary build and log directory was removed after the run.
+
 A scratch Nitpick probe called `parse_ref_definition` with the whole input
 chunk, then looked up the supplied label in a fresh map for each input.
 It used the same build and link sequence. Both binaries exited 0 with
