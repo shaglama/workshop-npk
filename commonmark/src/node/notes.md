@@ -1,10 +1,9 @@
-Queue line done: 1. `next` — **node part** (src/node/). Brief: `briefs/node.md`.
+Queue line done: 2. `next` — **node writer-check fix** (small): in `src/node/checks/check_node.npk` (the cases Astra's review names, lines 58 and 236), the `"\xFF"` string literals build U+00FF (two bytes C3 BF), not the raw byte FF the notes claim to cover. Build the byte with `buffer_putc(@buf, 255i64)` and assert length and bytes after cloning and consolidation, per Astra's review in `src/blocks/notes.md`.
 
 # Node — Sol (OpenAI)
 
-Part 5 implementation and the brief's writer checks are complete. All writes
-are under `commonmark/src/node/`, as permitted by `commonmark/assign/sol.txt`.
-No other queue line was started.
+The node part is blocked on manager review. Astra completed the part review
+and requested the writer-check correction above.
 
 ## Implementation
 
@@ -78,6 +77,11 @@ exit status, output, LLVM tool versions, compiler commit `3a45b7c4`, and hashes:
 - npkc SHA-256: `23022ef161268018fb83227c8f5f0f26d80917eff715af738c7e7e54a41f90a0`
 - npkrt.o SHA-256: `c8e5033ad17c70f838d567157738a6cc046af0ca3140ad92259fa71f0e747b4e`
 
+The corrected writer checks construct raw `FF` with `buffer_putc(@buf, 255i64)`.
+They verify the exact length and bytes of the saved clone (`41 00 FF 5A`)
+after replacing the stored literal, the consolidated literal (`41 00 FF 42`)
+after each merge pass, and the detached node's literal (`FF 42`).
+
 `checks/check_node.npk` exercises every public call: empty creation; every kind;
 root establishment; store growth; all plain payload fields and all string
 getters/setters; independent clones surviving replacement; byte strings with
@@ -97,8 +101,7 @@ and unescaping only. Corrected the input to ` a&amp;b ` with the independently
 specified expectation `a&b`; no dependency implementation was changed.
 
 These are the brief's writer checks. The brief names Neon for the independent
-node seam suite, and the queue reassigns that suite to Sonnet. The independent
-suite and Astra's review are pending handoff steps.
+node seam suite, and the queue records Sonnet's delivery of that suite.
 
 ## Compiler notes
 
@@ -107,6 +110,8 @@ No possible compiler fault observed: no crash, optimization divergence, or
 unstable output. Compiler diagnostics encountered during writing were ordinary
 language rules (reserved `end`, cast precedence, and main/exit/relay restrictions)
 and were corrected without a workaround or contract change.
+The raw-byte correction uses the string-escape behavior documented in
+`commonmark/NOTES.md`. Both corrected runs passed without a new compiler finding.
 
 ## Handoff
 

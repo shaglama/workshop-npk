@@ -2,7 +2,7 @@
 // Expected values and event order are hand-written; no parser is involved.
 mod:check_node;
 use "../cm_node.npk".*;
-use "../../buffer/cm_buffer.npk".{Chunk, chunk_all};
+use "../../buffer/cm_buffer.npk".{Buffer, Chunk, buffer_create, buffer_detach, buffer_putc, buffer_puts, chunk_all};
 use "../../references/cm_refs.npk".{RefMap, RefHit, refmap_new, refmap_add};
 
 func:out = NIL(string:s) never fails {
@@ -12,6 +12,11 @@ func:out = NIL(string:s) never fails {
 };
 func:literal_is = bool(Document:d, int64:n, string:expected) {
     string:s = relay node_literal(d, n); pass string_equals(s, expected);
+};
+func:binary_literal_matches = bool(string:s, uint8:last) never fails {
+    if (s.len != 4i64) { pass false; }
+    fixed uint8[]:bytes = string_bytes(s);
+    pass (bytes[0i64] == 65u8 && bytes[1i64] == 0u8 && bytes[2i64] == 255u8 && bytes[3i64] == last);
 };
 func:links = bool(Document:d, int64:n, int64:p, int64:prev, int64:next,
     int64:first, int64:last) never fails {
@@ -55,12 +60,16 @@ func:payloads = int32() {
     drop node_append_child(@d, r, ls); drop node_append_child(@d, ls, item);
     drop node_append_child(@d, item, code); drop node_append_child(@d, p, custom);
     drop node_append_child(@d, r, html);
-    string:lit = string_concat("A\0", "\xFFZ");
+    Buffer:buf = relay buffer_create();
+    relay buffer_puts(@buf, "A\0");
+    relay buffer_putc(@buf, 255i64);
+    relay buffer_puts(@buf, "Z");
+    string:lit = raw buffer_detach(move(buf));
     drop node_set_literal(@d, t, move(lit));
     string:saved = relay node_literal(d, t);
     string:replacement = string_concat("new", " text");
     drop node_set_literal(@d, t, move(replacement));
-    if (!string_equals(saved, "A\0\xFFZ") || !(relay literal_is(d, t, "new text"))) { pass 8i32; }
+    if (!(raw binary_literal_matches(saved, 90u8)) || !(relay literal_is(d, t, "new text"))) { pass 8i32; }
     string:raw_content = "[link] and *emphasis*\n";
     drop node_set_literal(@d, p, move(raw_content));
     if (!(relay literal_is(d, p, "[link] and *emphasis*\n"))) { pass 9i32; }
@@ -233,7 +242,10 @@ func:consolidation = int32() {
     drop node_append_child(@d, p, a); drop node_append_child(@d, p, b); drop node_append_child(@d, p, c);
     drop node_append_child(@d, p, em); drop node_append_child(@d, em, x); drop node_append_child(@d, em, y);
     drop node_append_child(@d, p, z);
-    string:sa = "A\0"; string:sb = ""; string:sc = "\xFFB";
+    Buffer:buf = relay buffer_create();
+    relay buffer_putc(@buf, 255i64);
+    relay buffer_puts(@buf, "B");
+    string:sa = "A\0"; string:sb = ""; string:sc = raw buffer_detach(move(buf));
     string:sx = "x"; string:sy = "y"; string:sz = "z";
     drop node_set_literal(@d, a, move(sa)); drop node_set_literal(@d, b, move(sb));
     drop node_set_literal(@d, c, move(sc)); drop node_set_literal(@d, x, move(sx));
@@ -242,18 +254,23 @@ func:consolidation = int32() {
     drop node_set_sourcepos(@d, c, 2i64, 1i64, 3i64, 9i64);
     string:before = relay node_literal(d, a);
     drop consolidate_text_nodes(@d, r);
-    if (!(relay literal_is(d, a, "A\0\xFFB")) || !(relay literal_is(d, x, "xy"))
+    string:merged_text = relay node_literal(d, a);
+    if (!(raw binary_literal_matches(merged_text, 66u8)) || !(relay literal_is(d, x, "xy"))
         || !(relay literal_is(d, z, "z")) || !string_equals(before, "A\0")) { pass 50i32; }
     if (!(raw links(d, b, NO_NODE, NO_NODE, NO_NODE, NO_NODE, NO_NODE))
         || !(raw links(d, c, NO_NODE, NO_NODE, NO_NODE, NO_NODE, NO_NODE))
         || !(raw links(d, y, NO_NODE, NO_NODE, NO_NODE, NO_NODE, NO_NODE))) { pass 51i32; }
-    if (!(relay literal_is(d, c, "\xFFB")) || (raw node_info(d, c)).kind != NodeKind.Text
+    string:detached = relay node_literal(d, c);
+    fixed uint8[]:detached_bytes = string_bytes(detached);
+    if (detached.len != 2i64 || detached_bytes[0i64] != 255u8 || detached_bytes[1i64] != 66u8
+        || (raw node_info(d, c)).kind != NodeKind.Text
         || (raw node_info(d, p)).first_child != a || (raw node_info(d, a)).next != em
         || (raw node_info(d, em)).prev != a || (raw node_info(d, em)).last_child != x) { pass 52i32; }
     NodeInfo:merged = raw node_info(d, a);
     if (merged.start_line != 1i64 || merged.start_column != 1i64 || merged.end_line != 1i64 || merged.end_column != 9i64) { pass 57i32; }
     drop consolidate_text_nodes(@d, r); // idempotence
-    if (!(relay literal_is(d, a, "A\0\xFFB"))) { pass 53i32; }
+    string:merged_again = relay node_literal(d, a);
+    if (!(raw binary_literal_matches(merged_again, 66u8))) { pass 53i32; }
     // cmark also merges following Text siblings when the chosen root is Text.
     int64:last = raw node_new(@d, NodeKind.Text); string:tail = "!";
     drop node_set_literal(@d, last, move(tail)); drop node_append_child(@d, p, last);
