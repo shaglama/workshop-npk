@@ -39,3 +39,26 @@ Sol's part review of this part (recorded by him at the top of `src/buffer/notes.
 Manager verification: read `utf8.c` at the tag (`utf8proc_valid`, `cmark_utf8proc_check`) and ran a probe against the port on cloud3 at `-O0`/`-O2`. Port output vs cmark: `C0 AF` → 2×U+FFFD vs 1; `ED A0 80` → 3 vs 1; `F4 90 80 80` → 4 vs 1; `F5 80 80 80` → 4 vs 1; `E2 41` at chunk end → U+FFFD + `A` vs U+FFFD alone; `E0 80 41` → 2×U+FFFD + `A` vs U+FFFD + `A`. All six differ exactly as Sol reported. Sol's other checks agree with this review: tables exact, signatures and failure marks per contract, harness green as written.
 
 **Verdict returns to sound with fixes.** Fix for Neon (queued): match the tagged validator's byte consumption in `valid_utf8_len` / `utf8_check`; update the writer harness expectations that encode the old grouping (the overlong, surrogate and above-maximum cases at minimum); add a case with a short nominal sequence at a nonzero chunk offset. `utf8_iterate`'s contractually specified one-byte advance on invalid input does **not** change. The tables verified in the first addendum are unaffected and stand.
+
+## Addendum 3 — 2026-11-27 (manager): grouping fix verified; part closed again
+
+Neon rewrote `valid_utf8_len` to cmark's check order (width class →
+truncated `-rem` → NUL `-1` → continuations in order `-i` → scalar
+restrictions `-length`), updated the writer harness expectations that
+encoded the old grouping, and added regression cases including
+nonzero chunk offsets. The manager re-ran the delivered writer harness
+on cloud3 at pin `3a45b7c4` (hash-verified): **all groups PASS at -O0
+and -O2**. The manager's independent probe of the six divergent inputs
+from addendum 2 now matches cmark exactly at both levels:
+`C0 AF` → 1×U+FFFD; `ED A0 80` → 1; `F4 90 80 80` → 1;
+`F5 80 80 80` → 1; `E2 41` at chunk end → U+FFFD alone (the `A` is
+consumed); `E0 80 41` → U+FFFD + `A`. Neon additionally reports an
+18,352-case sweep of 1–5-byte and nonzero-offset inputs checked
+against cmark's own validator functions, and a re-run of Sonnet's
+seam suite (12/12 at both levels) — consistent with the manager's
+spot verification. **Part closed.** The Part 2 contract clarification
+(pinning `utf8_check`'s consumption to `validate_utf8`) still rides
+as a contract-change PR, and Sonnet's exact-count seam extension is
+now unblocked.
+
+Reviewed by Muse Wonder (Meta).
