@@ -1,0 +1,107 @@
+Compiler commit: 3a45b7c4
+npkc sha256: 23022ef161268018fb83227c8f5f0f26d80917eff715af738c7e7e54a41f90a0
+Library: ./pin/lib
+$ opt-20 --version
+Ubuntu LLVM version 20.1.2
+  Optimized build.
+  Default target: x86_64-pc-linux-gnu
+  Host CPU: skylake-avx512
+exit: 0
+
+-O0
+$ ./pin/npkc commonmark/tests/seams/escape/escape_seam.npk -o commonmark/tests/seams/escape/.build-3r_ahyzr/escape.ll
+exit: 0
+$ opt-20 -O0 -S commonmark/tests/seams/escape/.build-3r_ahyzr/escape.ll -o commonmark/tests/seams/escape/.build-3r_ahyzr/escape.opt.ll
+exit: 0
+$ llc-20 -O0 -filetype=obj -relocation-model=static commonmark/tests/seams/escape/.build-3r_ahyzr/escape.opt.ll -o commonmark/tests/seams/escape/.build-3r_ahyzr/escape.o
+exit: 0
+$ ld.lld-20 -static -o commonmark/tests/seams/escape/.build-3r_ahyzr/escape_seam commonmark/tests/seams/escape/.build-3r_ahyzr/escape.o ./pin/npkrt.o
+exit: 0
+$ commonmark/tests/seams/escape/.build-3r_ahyzr/escape_seam
+PASS HTML nonsecure escapes only four characters in the chunk
+PASS HTML secure escapes slash and the usual characters
+FAIL HTML secure escapes apostrophe
+  expected: kept<&|'/:&#39;
+  actual:   kept<&|'/:'
+PASS href passes reserved bytes and existing percent escapes
+PASS href combines uppercase byte escapes and HTML entities
+PASS href processes arbitrary bytes through embedded NUL
+PASS entities decode adjacent names and multi-scalar values
+PASS entities decode decimal and hex at the digit limits
+PASS entities replace zero, surrogates and out-of-range scalars
+PASS entities keep malformed, unknown and overlong references
+PASS entities decode once
+PASS entities stop before a semicolon beyond the chunk
+PASS backslashes unescape all 32 ASCII punctuation characters
+PASS backslashes survive before letters, digits, whitespace and Unicode
+PASS backslashes consume escaped backslashes in pairs
+PASS backslashes respect both chunk boundaries
+PASS URL trims raw ASCII whitespace before entity and backslash decoding
+PASS URL keeps non-ASCII edge spaces
+PASS URL trims all-whitespace input to empty
+PASS URL cleaning feeds href escaping
+PASS title strips double quotes at the chunk bounds and preserves inner spaces
+PASS title strips single quotes before decoding entities and backslashes
+PASS title strips one pair of parentheses
+PASS title preserves outer whitespace and the enclosed quotes
+PASS title preserves mismatched delimiters
+PASS title preserves a lone quote
+PASS title decodes entity delimiters after the stripping step
+PASS title accepts an empty quoted title
+PASS HTML nonsecure empty chunk preserves the buffer
+PASS HTML secure empty chunk preserves the buffer
+PASS href empty chunk preserves the buffer
+PASS entities empty chunk preserves the buffer
+PASS backslashes empty chunk preserves the buffer
+PASS URL empty chunk returns an empty string
+PASS title empty chunk returns an empty string
+exit: 1
+
+-O2
+$ ./pin/npkc commonmark/tests/seams/escape/escape_seam.npk -o commonmark/tests/seams/escape/.build-brl_08r5/escape.ll
+exit: 0
+$ opt-20 -O2 -S commonmark/tests/seams/escape/.build-brl_08r5/escape.ll -o commonmark/tests/seams/escape/.build-brl_08r5/escape.opt.ll
+exit: 0
+$ llc-20 -O2 -filetype=obj -relocation-model=static commonmark/tests/seams/escape/.build-brl_08r5/escape.opt.ll -o commonmark/tests/seams/escape/.build-brl_08r5/escape.o
+exit: 0
+$ ld.lld-20 -static -o commonmark/tests/seams/escape/.build-brl_08r5/escape_seam commonmark/tests/seams/escape/.build-brl_08r5/escape.o ./pin/npkrt.o
+exit: 0
+$ commonmark/tests/seams/escape/.build-brl_08r5/escape_seam
+PASS HTML nonsecure escapes only four characters in the chunk
+PASS HTML secure escapes slash and the usual characters
+FAIL HTML secure escapes apostrophe
+  expected: kept<&|'/:&#39;
+  actual:   kept<&|'/:'
+PASS href passes reserved bytes and existing percent escapes
+PASS href combines uppercase byte escapes and HTML entities
+PASS href processes arbitrary bytes through embedded NUL
+PASS entities decode adjacent names and multi-scalar values
+PASS entities decode decimal and hex at the digit limits
+PASS entities replace zero, surrogates and out-of-range scalars
+PASS entities keep malformed, unknown and overlong references
+PASS entities decode once
+PASS entities stop before a semicolon beyond the chunk
+PASS backslashes unescape all 32 ASCII punctuation characters
+PASS backslashes survive before letters, digits, whitespace and Unicode
+PASS backslashes consume escaped backslashes in pairs
+PASS backslashes respect both chunk boundaries
+PASS URL trims raw ASCII whitespace before entity and backslash decoding
+PASS URL keeps non-ASCII edge spaces
+PASS URL trims all-whitespace input to empty
+PASS URL cleaning feeds href escaping
+PASS title strips double quotes at the chunk bounds and preserves inner spaces
+PASS title strips single quotes before decoding entities and backslashes
+PASS title strips one pair of parentheses
+PASS title preserves outer whitespace and the enclosed quotes
+PASS title preserves mismatched delimiters
+PASS title preserves a lone quote
+PASS title decodes entity delimiters after the stripping step
+PASS title accepts an empty quoted title
+PASS HTML nonsecure empty chunk preserves the buffer
+PASS HTML secure empty chunk preserves the buffer
+PASS href empty chunk preserves the buffer
+PASS entities empty chunk preserves the buffer
+PASS backslashes empty chunk preserves the buffer
+PASS URL empty chunk returns an empty string
+PASS title empty chunk returns an empty string
+exit: 1

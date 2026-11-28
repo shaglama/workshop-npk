@@ -1,0 +1,225 @@
+// Sol (OpenAI). Expectations from INTERFACES.md Part 3, the CommonMark
+// 0.31.2 examples and cmark 0.31.2's reference behavior.
+mod:escape_seam;
+
+use "../../../src/buffer/cm_buffer.npk".*;
+use "../../../src/escape/cm_escape.npk".*;
+use "../../../../pin/lib/nio.npk".{NioW, nio_stdout, nio_put, nio_line, nio_end};
+use "../../../../pin/lib/nstr.npk".nstr_eq;
+
+struct:Report = {
+    NioW:out;
+    int32:status;
+};
+
+func:expect = NIL(Report->:report, string:label, string:got, string:expected) {
+    if (raw nstr_eq(got, expected)) {
+        relay nio_put(@report.out, "PASS ");
+        relay nio_line(@report.out, label);
+    } else {
+        report.status = 1i32;
+        relay nio_put(@report.out, "FAIL ");
+        relay nio_line(@report.out, label);
+        relay nio_put(@report.out, "  expected: ");
+        relay nio_line(@report.out, expected);
+        relay nio_put(@report.out, "  actual:   ");
+        relay nio_line(@report.out, got);
+    }
+    pass NIL;
+};
+
+// Every append call starts with bytes that would change if processed as input.
+fixed string:prefix = "kept<&|'/:";
+
+func:start_append = Buffer() {
+    Buffer:out = relay buffer_create();
+    relay buffer_puts(@out, prefix);
+    pass move(out);
+};
+
+func:expect_append = NIL(Report->:report, string:label, move Buffer:out, string:suffix) {
+    string:got = raw buffer_detach(move(out));
+    string:expected = string_concat(prefix, suffix);
+    pass relay expect(report, label, got, expected);
+};
+
+func:expect_html = NIL(Report->:report, string:label, string:base, Chunk:c, bool:secure, string:expected) {
+    Buffer:out = relay start_append();
+    relay escape_html_into(@out, base, c, secure);
+    pass relay expect_append(report, label, move(out), expected);
+};
+
+func:expect_href = NIL(Report->:report, string:label, string:base, Chunk:c, string:expected) {
+    Buffer:out = relay start_append();
+    relay escape_href_into(@out, base, c);
+    pass relay expect_append(report, label, move(out), expected);
+};
+
+func:expect_entities = NIL(Report->:report, string:label, string:base, Chunk:c, string:expected) {
+    Buffer:out = relay start_append();
+    relay unescape_entities_into(@out, base, c);
+    pass relay expect_append(report, label, move(out), expected);
+};
+
+func:expect_backslashes = NIL(Report->:report, string:label, string:base, Chunk:c, string:expected) {
+    Buffer:out = relay start_append();
+    relay unescape_backslashes_into(@out, base, c);
+    pass relay expect_append(report, label, move(out), expected);
+};
+
+func:check_html = NIL(Report->:report) {
+    string:base = "é<\"é'/> &>";
+    Chunk:middle = raw chunk_of(base, 2i64, base.len - 3i64);
+    relay expect_html(report, "HTML nonsecure escapes only four characters in the chunk",
+                      base, middle, false, "&lt;&quot;é'/&gt; &amp;");
+    string:slash = "</&>";
+    relay expect_html(report, "HTML secure escapes slash and the usual characters",
+                      slash, raw chunk_all(slash), true, "&lt;&#47;&amp;&gt;");
+    string:quote = "'";
+    relay expect_html(report, "HTML secure escapes apostrophe",
+                      quote, raw chunk_all(quote), true, "&#39;");
+    pass NIL;
+};
+
+func:check_href = NIL(Report->:report) {
+    string:url = "https://ex.test/a_b-~+!$*(),.@;:?a=%2f#z%";
+    relay expect_href(report, "href passes reserved bytes and existing percent escapes",
+                      url, raw chunk_all(url), url);
+    string:base = "&é&' [<>]\"\\^\u{60}{}|\t'";
+    Chunk:middle = raw chunk_of(base, 1i64, base.len - 2i64);
+    relay expect_href(report, "href combines uppercase byte escapes and HTML entities",
+                      base, middle, "%C3%A9&amp;&#x27;%20%5B%3C%3E%5D%22%5C%5E%60%7B%7D%7C%09");
+    Buffer:input = relay buffer_create();
+    relay buffer_putc(@input, 0i64);
+    relay buffer_putc(@input, 255i64);
+    relay buffer_putc(@input, 65i64);
+    string:bytes = raw buffer_detach(move(input));
+    relay expect_href(report, "href processes arbitrary bytes through embedded NUL",
+                      bytes, raw chunk_all(bytes), "%00%FFA");
+    pass NIL;
+};
+
+func:check_entities = NIL(Report->:report) {
+    string:names = "&Dcaron;&ngE;&ClockwiseContourIntegral;";
+    relay expect_entities(report, "entities decode adjacent names and multi-scalar values",
+                          names, raw chunk_all(names), "Ď≧\u{338}∲");
+    string:numbers = "&#0000123;&#X01f600;&#x10FFFF;";
+    relay expect_entities(report, "entities decode decimal and hex at the digit limits",
+                          numbers, raw chunk_all(numbers), "{😀\u{10ffff}");
+    string:invalid = "&#0;&#xD800;&#xDFFF;&#1114112;";
+    relay expect_entities(report, "entities replace zero, surrogates and out-of-range scalars",
+                          invalid, raw chunk_all(invalid), "����");
+    string:malformed = "&NotAnEntity; &AMPmissing; &amp &#; &#x; &#00000123; &#x0000041;";
+    relay expect_entities(report, "entities keep malformed, unknown and overlong references",
+                          malformed, raw chunk_all(malformed), malformed);
+    string:single_pass = "&amp;lt;&#38;#65;";
+    relay expect_entities(report, "entities decode once",
+                          single_pass, raw chunk_all(single_pass), "&lt;&#65;");
+    string:base = "X&amp;!";
+    relay expect_entities(report, "entities stop before a semicolon beyond the chunk",
+                          base, raw chunk_of(base, 1i64, 4i64), "&amp");
+    pass NIL;
+};
+
+func:check_backslashes = NIL(Report->:report) {
+    string:punct = "\\!\\\"\\#\\$\\%\\&\\'\\(\\)\\*\\+\\,\\-\\.\\/\\:\\;\\<\\=\\>\\?\\@\\[\\\\\\]\\^\\_\\\u{60}\\{\\|\\}\\~";
+    relay expect_backslashes(report, "backslashes unescape all 32 ASCII punctuation characters",
+                             punct, raw chunk_all(punct), "!\"#$%&'()*+,-./:;<=>?@[\\]^_\u{60}{|}~");
+    string:plain = "\\q\\7\\ \\\t\\\n\\é\\«";
+    relay expect_backslashes(report, "backslashes survive before letters, digits, whitespace and Unicode",
+                             plain, raw chunk_all(plain), plain);
+    string:run = r"\\\!";
+    relay expect_backslashes(report, "backslashes consume escaped backslashes in pairs",
+                             run, raw chunk_all(run), r"\!");
+    string:base = r"\!\?Z";
+    relay expect_backslashes(report, "backslashes respect both chunk boundaries",
+                             base, raw chunk_of(base, 1i64, 2i64), "!\\");
+    pass NIL;
+};
+
+func:check_urls = NIL(Report->:report) {
+    string:base = "L \t\r\n\x0b\x0c&#32;a&#92;?q=7&amp;x=\\_&#x20;\x0c\x0b\n\r\t R";
+    Chunk:middle = raw chunk_of(base, 1i64, base.len - 2i64);
+    string:cleaned = relay clean_url(base, middle);
+    relay expect(report, "URL trims raw ASCII whitespace before entity and backslash decoding",
+                 cleaned, " a?q=7&x=_ ");
+    string:nbsp = "\u{a0}café\u{a0}";
+    string:unicode = relay clean_url(nbsp, raw chunk_all(nbsp));
+    relay expect(report, "URL keeps non-ASCII edge spaces", unicode, nbsp);
+    string:space = " \t\r\n\x0b\x0c";
+    string:blank = relay clean_url(space, raw chunk_all(space));
+    relay expect(report, "URL trims all-whitespace input to empty", blank, "");
+
+    // Same call sequence a consumer uses before writing an href attribute.
+    string:raw_url = " \t /café&#92;?n=1&amp;x='&#32; ";
+    string:url = relay clean_url(raw_url, raw chunk_all(raw_url));
+    relay expect_href(report, "URL cleaning feeds href escaping",
+                      url, raw chunk_all(url), "/caf%C3%A9?n=1&amp;x=&#x27;%20");
+    pass NIL;
+};
+
+func:expect_title = NIL(Report->:report, string:label, string:input, string:expected) {
+    string:title = relay clean_title(input, raw chunk_all(input));
+    pass relay expect(report, label, title, expected);
+};
+
+func:check_titles = NIL(Report->:report) {
+    string:base = "X\"  a &amp; b  \"Z";
+    string:title = relay clean_title(base, raw chunk_of(base, 1i64, base.len - 2i64));
+    relay expect(report, "title strips double quotes at the chunk bounds and preserves inner spaces",
+                 title, "  a & b  ");
+    relay expect_title(report, "title strips single quotes before decoding entities and backslashes",
+                       "'&#92;*note*'", "*note*");
+    relay expect_title(report, "title strips one pair of parentheses", "((x))", "(x)");
+    relay expect_title(report, "title preserves outer whitespace and the enclosed quotes",
+                       " \t'&amp;' \n", " \t'&' \n");
+    relay expect_title(report, "title preserves mismatched delimiters", "(left'", "(left'");
+    relay expect_title(report, "title preserves a lone quote", "'", "'");
+    relay expect_title(report, "title decodes entity delimiters after the stripping step",
+                       "&quot;x&quot;", "\"x\"");
+    relay expect_title(report, "title accepts an empty quoted title", "''", "");
+    pass NIL;
+};
+
+func:check_empty = NIL(Report->:report) {
+    string:base = "&'\\?()";
+    Chunk:empty = raw chunk_of(base, 2i64, 0i64);
+    relay expect_html(report, "HTML nonsecure empty chunk preserves the buffer", base, empty, false, "");
+    relay expect_html(report, "HTML secure empty chunk preserves the buffer", base, empty, true, "");
+    relay expect_href(report, "href empty chunk preserves the buffer", base, empty, "");
+    relay expect_entities(report, "entities empty chunk preserves the buffer", base, empty, "");
+    relay expect_backslashes(report, "backslashes empty chunk preserves the buffer", base, empty, "");
+    string:url = relay clean_url(base, empty);
+    relay expect(report, "URL empty chunk returns an empty string", url, "");
+    string:title = relay clean_title(base, empty);
+    relay expect(report, "title empty chunk returns an empty string", title, "");
+    pass NIL;
+};
+
+func:run_checks = int32() {
+    Report:report = Report{out: raw nio_stdout(), status: 0i32};
+    relay check_html(@report);
+    relay check_href(@report);
+    relay check_entities(@report);
+    relay check_backslashes(@report);
+    relay check_urls(@report);
+    relay check_titles(@report);
+    relay check_empty(@report);
+    relay nio_end(@report.out);
+    pass report.status;
+};
+
+func:main = int32(cstring[]:_~argv) {
+    Result<int32>:outcome = run_checks();
+    if (outcome.is_error) { !!! outcome.err; }
+    exit outcome.value;
+};
+
+func:failsafe = int32(Error:err) {
+    pick (err) {
+        (Unreachable, HeapOom, HeapBadRequest, WildLeak, StackExhausted,
+         MachineFault, DivByZero, DivOverflow, IntOverflow, OutOfBounds,
+         DecreasesViolated) { exit 100i32; },
+        (*) { exit 100i32; }
+    }
+};
