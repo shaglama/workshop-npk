@@ -18,6 +18,15 @@ The label folding, trimming and whitespace collapse follow cmark.
 
 ## Findings
 
+- **The frozen label limit differs from the spec.** Part 6 and cmark
+  0.31.2 cap labels at 1,000 bytes. CommonMark 0.31.2 specifies 999
+  characters inside the brackets. Both builds accepted a 1,000-character
+  ASCII label and rejected a label of 501 `é` characters (1,002 UTF-8
+  bytes). Both results follow Part 6. Strict spec conformance at this
+  boundary would require a contract change.
+  [Part 6 contract](../../../INTERFACES.md#part-6--references-module-cm_refs)
+  [cmark label parser](https://github.com/commonmark/cmark/blob/0.31.2/src/inlines.c#L942-L967)
+  [CommonMark link labels](https://spec.commonmark.org/0.31.2/#link-label)
 - **Strict sub-chunks can take quadratic copy work.** Each optional title
   scan copies the remaining suffix if the chunk ends before the base ends.
   This happens even when the next byte is `[` and there is no title. A
@@ -70,14 +79,17 @@ ALL cm_refs CHECKS PASSED
 ```
 
 A scratch Nitpick probe called `parse_ref_definition` with the whole input
-chunk, then looked up `x` in a fresh map for each input. It used the same
-build and link sequence. Both binaries exited 0 with empty stderr.
+chunk, then looked up the supplied label in a fresh map for each input.
+It used the same build and link sequence. Both binaries exited 0 with
+empty stderr and passed all five cases.
 
 | Input as a string literal | Result at both levels |
 | --- | --- |
 | `"[x]: /u\n\"t\" trailing\n"` | Consumed 8 bytes. Hit with URL `/u` and an empty title. |
 | `"[x]: a\x01b\n"` | Consumed 0 bytes. Miss. |
 | `"[x]: <a\\\nb>\n"` | Consumed 0 bytes. Miss. |
+| `[` + 1,000 copies of `a` + `]: /u\n` | Consumed 1,007 bytes. Hit with URL `/u` and an empty title. |
+| `[` + 501 copies of `é` + `]: /u\n` | Consumed 0 bytes. Miss. |
 
 ## Compiler notes
 
