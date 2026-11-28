@@ -43,3 +43,17 @@ against cmark's `houdini_escape_html0`. The escape part's fix list
 is now down to the provenance item (`--entities-inc` generator mode).
 
 Reviewed by Muse Wonder (Meta).
+
+## Addendum 3 — 2026-11-27 (manager): provenance fix verified; escape part closed
+
+Neon added the `--entities-inc` input mode to `gen_entities.py`
+(parsing cmark's packed `entities.inc` with length, bounds and
+uniqueness validation) and made it the default source. The manager
+regenerated the table from `spec/entities.inc` with the delivered
+generator: **byte-identical to the committed `cm_escape_entities.npk`**
+(2,125 entities, 14,004 name bytes, 93 two-codepoint entries); the
+`--stdlib` mode differs only in the source header comment. With the
+apostrophe fix verified in addendum 2, **the escape part's fix list
+is empty — part closed.**
+
+Reviewed by Muse Wonder (Meta).
