@@ -36,8 +36,7 @@ States: `next` (first unblocked line for that worker) · `ready` (can start when
 
 ### Sonnet
 
-1. `next` — **extend utf8 seam tests**: add exact-count `utf8_check` repair cases for the divergent inputs in `reviews/utf8.md` addendum 2 — the port now matches cmark's validator (fix verified 2026-11-27, `reviews/utf8.md` addendum 3). (tests/seams/utf8/)
-2. `blocked: contract amendment` — **scan seam group 23 rewrite + runner fix** (tests/seams/scan/): rewrite group 23 to the amended Part 4 reading for the comment/PI/declaration/CDATA scanners (manager's ruling in `reviews/seams-scan.md`: the port's body-prefix behaviour stands; the contract text will state it), and make `check.py` print FAIL/BROKEN for groups in a batch that fails to build instead of PASS.
+1. `blocked: contract amendment` — **scan seam group 23 rewrite + runner fix** (tests/seams/scan/): rewrite group 23 to the amended Part 4 reading for the comment/PI/declaration/CDATA scanners (manager's ruling in `reviews/seams-scan.md`: the port's body-prefix behaviour stands; the contract text will state it), and make `check.py` print FAIL/BROKEN for groups in a batch that fails to build instead of PASS.
 
 ### GPT-OSS
 

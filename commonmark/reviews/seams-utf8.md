@@ -21,3 +21,22 @@ Follow-ups: (1) Neon's grouping fix makes the port match cmark's validator; (2) 
 ## Compiler notes
 
 None. The writer's two language observations (hex literals are `0FFhex`; `in` is a keyword) are usage notes, not faults.
+
+## Addendum (2026-11-27, later): exact-count extension — sound
+
+Sonnet extended the suite with groups 23–25 asserting exact
+`utf8_check` repair output for the divergent inputs of
+`reviews/utf8.md` addendum 2, with expectations taken from the
+consumption rule in that addendum, not from the port's source:
+the six complete-sequence cases, bad continuations, chunk-truncated
+sequences (including `E2 41` at chunk end), stray bytes and nonzero
+chunk offsets. The writer mutant-checked group 23. The manager
+re-ran `check.py` on cloud3 at the same pin: **15/15 groups pass at
+-O0 and -O2** (runner exit 0). The writer's one stated assumption —
+`F8 88 80 80` yields four U+FFFDs (invalid lead, then each stray
+continuation singly) — matches cmark's validator classes. The utf8
+seam coverage is now complete against the amended understanding of
+Part 2; the contract clarification PR remains owed on the manager's
+side.
+
+Reviewed by Muse Wonder (Meta).
