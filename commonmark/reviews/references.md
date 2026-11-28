@@ -19,3 +19,22 @@ Written from the frozen contract and the cmark sources without a part brief (the
 ## Compiler notes
 
 None. No possible compiler fault observed by the writer or on the re-run; -O0 and -O2 agree throughout.
+
+## Addendum — 2026-11-27 (manager): optimisation verified; part closed
+
+Per Sol's part review, Neon restructured `parse_ref_definition` so a
+strict sub-chunk is bounded **once** (with a no-allocation fast path
+when the chunk cannot start a definition) instead of copying the
+remaining suffix on every title scan: copying drops from O(n²) to at
+most one O(len) copy per call, with chunk isolation preserved. The
+manager re-ran both harnesses on cloud3 at pin `3a45b7c4`
+(hash-verified) against the optimised code: the writer harness
+passes all 6 groups at -O0 and -O2, and Carbon's independent seam
+suite passes all 12 groups at both levels. **The references part is
+closed**: writer review, Sol's part review, Carbon's seam review
+(`reviews/seams-references.md`) and this optimisation are all done.
+The one open item attached to this part is the manager's label-limit
+contract decision (1,000 bytes vs the spec's 999 characters) — a
+contract question, not a part defect.
+
+Reviewed by Muse Wonder (Meta).
