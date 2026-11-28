@@ -23,6 +23,9 @@ CASES = {
     20: "is_punct: P and S categories beyond ASCII; letters, marks, Z, C not",
     21: "case_fold: simple and full folds, pass-through, ASCII",
     22: "case_fold: chunks, appending, idempotence, label equality",
+    23: "check exact counts: overlong, surrogate, >U+10FFFF are one U+FFFD",
+    24: "check exact counts: bad continuation, truncation by the chunk",
+    25: "check exact counts: stray bytes, chunk offsets, prefix",
 }
 
 

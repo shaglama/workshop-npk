@@ -1,8 +1,14 @@
-Queue line done: 1. `next` — **seam tests: utf8** (tests/seams/utf8/), from INTERFACES.md Part 2 alone.
+Queue line done: 1. `next` — **extend utf8 seam tests**: add exact-count `utf8_check` repair cases for the divergent inputs in `reviews/utf8.md` addendum 2 — the port now matches cmark's validator (fix verified 2026-11-27, `reviews/utf8.md` addendum 3). (tests/seams/utf8/)
+
+Extension (this session): groups 23–25 added, 15 groups in all, every one passes at `-O0` and `-O2` (`check.log`). Expectations come from the consumption rule in `reviews/utf8.md` addenda 2–3 (truncated → rest of chunk; first bad continuation at i → i bytes; overlong/surrogate/above-max → whole nominal sequence), not from the port's source. 23: the six divergent inputs' complete-sequence cases plus boundary neighbours that stay valid; 24: bad continuations and chunk-truncated sequences (including `E2 41` at chunk end → one U+FFFD, the `A` consumed); 25: stray bytes, nonzero chunk offsets, prefix. The suite can fail: changing one expected count makes group 23 exit and report FAIL. Assumption not stated in the review: `F8 88 80 80` is one U+FFFD for the lead plus one per stray continuation (4 total); it passes.
+
+No possible compiler faults in this line. Earlier line, kept below:
+
+(Earlier line done: **seam tests: utf8**, from INTERFACES.md Part 2 alone.)
 
 Written by Sonnet (Claude Sonnet 5.5, Anthropic) from INTERFACES.md Part 2, the CommonMark spec's definitions of whitespace and punctuation, and the Unicode standard (UTF-8 well-formedness, general categories, full case folding). The part's source and its review were not read.
 
-Run from the repository root: `python3 commonmark/tests/seams/utf8/check.py`. It builds and runs `utf8_seam.npk` at `-O0` and `-O2` with `pin/npkc` (3a45b7c4), `pin/npkrt.o` and `pin/lib`. [Log](check.log) records the compiler sha256 and every command. Result: 12 groups, all pass at both levels.
+Run from the repository root: `python3 commonmark/tests/seams/utf8/check.py`. It builds and runs `utf8_seam.npk` at `-O0` and `-O2` with `pin/npkc` (3a45b7c4), `pin/npkrt.o` and `pin/lib`. [Log](check.log) records the compiler sha256 and every command. Result: 15 groups (11–25), all pass at both levels.
 
 Groups (exit code 11–22 names the failing one):
 

@@ -66,15 +66,15 @@ Ubuntu LLD 20.1.2 (compatible with GNU linkers)
 exit: 0
 
 -O0
-$ pin/npkc commonmark/tests/seams/utf8/utf8_seam.npk -o commonmark/tests/seams/utf8/.build-mr6jvwws/utf8.ll
+$ pin/npkc commonmark/tests/seams/utf8/utf8_seam.npk -o commonmark/tests/seams/utf8/.build-stwjtd3l/utf8.ll
 exit: 0
-$ opt-20 -O0 -S commonmark/tests/seams/utf8/.build-mr6jvwws/utf8.ll -o commonmark/tests/seams/utf8/.build-mr6jvwws/utf8.opt.ll
+$ opt-20 -O0 -S commonmark/tests/seams/utf8/.build-stwjtd3l/utf8.ll -o commonmark/tests/seams/utf8/.build-stwjtd3l/utf8.opt.ll
 exit: 0
-$ llc-20 -O0 -filetype=obj -relocation-model=static commonmark/tests/seams/utf8/.build-mr6jvwws/utf8.opt.ll -o commonmark/tests/seams/utf8/.build-mr6jvwws/utf8.o
+$ llc-20 -O0 -filetype=obj -relocation-model=static commonmark/tests/seams/utf8/.build-stwjtd3l/utf8.opt.ll -o commonmark/tests/seams/utf8/.build-stwjtd3l/utf8.o
 exit: 0
-$ ld.lld-20 -static -o commonmark/tests/seams/utf8/.build-mr6jvwws/utf8_seam commonmark/tests/seams/utf8/.build-mr6jvwws/utf8.o pin/npkrt.o
+$ ld.lld-20 -static -o commonmark/tests/seams/utf8/.build-stwjtd3l/utf8_seam commonmark/tests/seams/utf8/.build-stwjtd3l/utf8.o pin/npkrt.o
 exit: 0
-$ commonmark/tests/seams/utf8/.build-mr6jvwws/utf8_seam
+$ commonmark/tests/seams/utf8/.build-stwjtd3l/utf8_seam
 exit: 0
 PASS iterate: valid sequences, chunk-relative positions, length-class boundaries, NUL
 PASS iterate: invalid bytes, overlongs, surrogates, >U+10FFFF, truncation by the chunk
@@ -88,17 +88,20 @@ PASS is_punct: all 128 ASCII code points
 PASS is_punct: P and S categories beyond ASCII; letters, marks, Z, C not
 PASS case_fold: simple and full folds, pass-through, ASCII
 PASS case_fold: chunks, appending, idempotence, label equality
+PASS check exact counts: overlong, surrogate, >U+10FFFF are one U+FFFD
+PASS check exact counts: bad continuation, truncation by the chunk
+PASS check exact counts: stray bytes, chunk offsets, prefix
 
 -O2
-$ pin/npkc commonmark/tests/seams/utf8/utf8_seam.npk -o commonmark/tests/seams/utf8/.build-9367qaau/utf8.ll
+$ pin/npkc commonmark/tests/seams/utf8/utf8_seam.npk -o commonmark/tests/seams/utf8/.build-tipgyqw4/utf8.ll
 exit: 0
-$ opt-20 -O2 -S commonmark/tests/seams/utf8/.build-9367qaau/utf8.ll -o commonmark/tests/seams/utf8/.build-9367qaau/utf8.opt.ll
+$ opt-20 -O2 -S commonmark/tests/seams/utf8/.build-tipgyqw4/utf8.ll -o commonmark/tests/seams/utf8/.build-tipgyqw4/utf8.opt.ll
 exit: 0
-$ llc-20 -O2 -filetype=obj -relocation-model=static commonmark/tests/seams/utf8/.build-9367qaau/utf8.opt.ll -o commonmark/tests/seams/utf8/.build-9367qaau/utf8.o
+$ llc-20 -O2 -filetype=obj -relocation-model=static commonmark/tests/seams/utf8/.build-tipgyqw4/utf8.opt.ll -o commonmark/tests/seams/utf8/.build-tipgyqw4/utf8.o
 exit: 0
-$ ld.lld-20 -static -o commonmark/tests/seams/utf8/.build-9367qaau/utf8_seam commonmark/tests/seams/utf8/.build-9367qaau/utf8.o pin/npkrt.o
+$ ld.lld-20 -static -o commonmark/tests/seams/utf8/.build-tipgyqw4/utf8_seam commonmark/tests/seams/utf8/.build-tipgyqw4/utf8.o pin/npkrt.o
 exit: 0
-$ commonmark/tests/seams/utf8/.build-9367qaau/utf8_seam
+$ commonmark/tests/seams/utf8/.build-tipgyqw4/utf8_seam
 exit: 0
 PASS iterate: valid sequences, chunk-relative positions, length-class boundaries, NUL
 PASS iterate: invalid bytes, overlongs, surrogates, >U+10FFFF, truncation by the chunk
@@ -112,3 +115,6 @@ PASS is_punct: all 128 ASCII code points
 PASS is_punct: P and S categories beyond ASCII; letters, marks, Z, C not
 PASS case_fold: simple and full folds, pass-through, ASCII
 PASS case_fold: chunks, appending, idempotence, label equality
+PASS check exact counts: overlong, surrogate, >U+10FFFF are one U+FFFD
+PASS check exact counts: bad continuation, truncation by the chunk
+PASS check exact counts: stray bytes, chunk offsets, prefix

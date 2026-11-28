@@ -562,6 +562,119 @@ func:g_fold_chunks = bool() {
     pass raw nstr_eq(a, b) && raw nstr_eq(d, e);
 };
 
+// ---- groups 23-25: check, exact replacement counts (cmark's validate_utf8) -------------
+// One U+FFFD replaces each ill-formed sequence, and it consumes: the rest of the chunk if
+// the lead byte's nominal length overruns it; else the bytes before the first bad
+// continuation (that byte is read again); else, for an overlong, surrogate or
+// above-U+10FFFF sequence, the whole nominal sequence.
+
+func:fffds = string(int64:n, string:tail) {
+    string:out = string_concat(tail, "");
+    int64:i = 0i64;
+    while (i < n) decreases n - i {
+        out = string_concat("\u{fffd}", out);
+        i = i + 1i64;
+    }
+    pass out;
+};
+
+// bytes (n of a b c d) followed by tail, whole string one chunk -> n_f U+FFFD then tail
+func:exact = bool(int64:n, int64:a, int64:b, int64:c, int64:d, int64:n_f, string:tail) {
+    string:s = string_concat(relay mk(n, a, b, c, d), tail);
+    string:got = relay check_all_of(s);
+    string:want = relay fffds(n_f, tail);
+    pass raw nstr_eq(got, want);
+};
+
+// the chunk ends right after the n bytes; "Z" lies beyond it in the base and must not appear
+func:exact_cut = bool(int64:n, int64:a, int64:b, int64:c, int64:d, int64:n_f) {
+    string:s = string_concat(relay mk(n, a, b, c, d), "Z");
+    Chunk:cut = raw chunk_of(s, 0i64, n);
+    string:got = relay check_after("", s, cut);
+    string:want = relay fffds(n_f, "");
+    pass raw nstr_eq(got, want);
+};
+
+// check of base[start, start+len) after the prefix "<" must equal want
+func:sub_is = bool(string:base, int64:start, int64:len, string:want) {
+    Chunk:c = raw chunk_of(base, start, len);
+    string:got = relay check_after("<", base, c);
+    pass raw nstr_eq(got, string_concat("<", want));
+};
+
+// group 23: complete but invalid sequences are one replacement
+func:g_check_whole = bool() {
+    if (!(relay exact(2i64, 192i64, 175i64, 0i64, 0i64, 1i64, "Z"))) { pass false; }     // C0 AF
+    if (!(relay exact(2i64, 192i64, 128i64, 0i64, 0i64, 1i64, "Z"))) { pass false; }     // C0 80
+    if (!(relay exact(2i64, 193i64, 191i64, 0i64, 0i64, 1i64, "Z"))) { pass false; }     // C1 BF
+    if (!(relay exact(3i64, 224i64, 128i64, 128i64, 0i64, 1i64, "Z"))) { pass false; }   // E0 80 80
+    if (!(relay exact(3i64, 224i64, 159i64, 191i64, 0i64, 1i64, "Z"))) { pass false; }   // E0 9F BF
+    if (!(relay exact(3i64, 237i64, 160i64, 128i64, 0i64, 1i64, "Z"))) { pass false; }   // ED A0 80
+    if (!(relay exact(3i64, 237i64, 191i64, 191i64, 0i64, 1i64, "Z"))) { pass false; }   // ED BF BF
+    if (!(relay exact(4i64, 240i64, 128i64, 128i64, 128i64, 1i64, "Z"))) { pass false; } // F0 80 80 80
+    if (!(relay exact(4i64, 240i64, 143i64, 191i64, 191i64, 1i64, "Z"))) { pass false; } // F0 8F BF BF
+    if (!(relay exact(4i64, 244i64, 144i64, 128i64, 128i64, 1i64, "Z"))) { pass false; } // F4 90 80 80
+    if (!(relay exact(4i64, 245i64, 128i64, 128i64, 128i64, 1i64, "Z"))) { pass false; } // F5 80 80 80
+    if (!(relay exact(4i64, 247i64, 191i64, 191i64, 191i64, 1i64, "Z"))) { pass false; } // F7 BF BF BF
+    // two in a row: two replacements
+    if (!(relay exact(4i64, 192i64, 175i64, 192i64, 175i64, 2i64, "Z"))) { pass false; }
+    // valid neighbours of those boundaries stay as they are
+    string:ok1 = relay mk(4i64, 244i64, 143i64, 191i64, 191i64);
+    string:ok2 = relay mk(3i64, 237i64, 159i64, 191i64, 0i64);
+    string:ok3 = relay mk(3i64, 224i64, 160i64, 128i64, 0i64);
+    string:ok4 = relay mk(4i64, 240i64, 144i64, 128i64, 128i64);
+    if (!(raw nstr_eq(relay check_all_of(ok1), ok1))) { pass false; }
+    if (!(raw nstr_eq(relay check_all_of(ok2), ok2))) { pass false; }
+    if (!(raw nstr_eq(relay check_all_of(ok3), ok3))) { pass false; }
+    pass raw nstr_eq(relay check_all_of(ok4), ok4);
+};
+
+// group 24: a bad continuation, or a sequence the chunk cuts short
+func:g_check_cont = bool() {
+    // the first bad continuation at position i consumes i bytes; that byte is kept
+    if (!(relay exact(1i64, 226i64, 0i64, 0i64, 0i64, 1i64, "AB"))) { pass false; }      // E2 41 42
+    if (!(relay exact(2i64, 226i64, 130i64, 0i64, 0i64, 1i64, "AB"))) { pass false; }    // E2 82 41 42
+    if (!(relay exact(2i64, 224i64, 128i64, 0i64, 0i64, 1i64, "AB"))) { pass false; }    // E0 80 41 42
+    if (!(relay exact(1i64, 195i64, 0i64, 0i64, 0i64, 1i64, "A"))) { pass false; }       // C3 41
+    if (!(relay exact(2i64, 240i64, 144i64, 0i64, 0i64, 1i64, "AB"))) { pass false; }    // F0 90 41 42
+    if (!(relay exact(3i64, 240i64, 144i64, 128i64, 0i64, 1i64, "A"))) { pass false; }   // F0 90 80 41
+    if (!(relay exact(1i64, 226i64, 0i64, 0i64, 0i64, 1i64, "\u{20ac}"))) { pass false; } // E2 then a whole char
+    // a nominal length that overruns the chunk consumes all the rest of it
+    if (!(relay exact_cut(1i64, 195i64, 0i64, 0i64, 0i64, 1i64))) { pass false; }        // C3
+    if (!(relay exact_cut(1i64, 192i64, 0i64, 0i64, 0i64, 1i64))) { pass false; }        // C0
+    if (!(relay exact_cut(1i64, 226i64, 0i64, 0i64, 0i64, 1i64))) { pass false; }        // E2
+    if (!(relay exact_cut(2i64, 226i64, 130i64, 0i64, 0i64, 1i64))) { pass false; }      // E2 82
+    if (!(relay exact_cut(2i64, 237i64, 160i64, 0i64, 0i64, 1i64))) { pass false; }      // ED A0
+    if (!(relay exact_cut(1i64, 240i64, 0i64, 0i64, 0i64, 1i64))) { pass false; }        // F0
+    if (!(relay exact_cut(2i64, 244i64, 144i64, 0i64, 0i64, 1i64))) { pass false; }      // F4 90
+    if (!(relay exact_cut(3i64, 240i64, 144i64, 128i64, 0i64, 1i64))) { pass false; }    // F0 90 80
+    // E2 41 with the chunk ending after the 41: the nominal 3 overruns, so the 41 is consumed too
+    if (!(relay exact_cut(2i64, 226i64, 65i64, 0i64, 0i64, 1i64))) { pass false; }
+    pass true;
+};
+
+// group 25: stray bytes, chunk offsets, prefix
+func:g_check_stray = bool() {
+    if (!(relay exact(1i64, 128i64, 0i64, 0i64, 0i64, 1i64, "Z"))) { pass false; }       // 80
+    if (!(relay exact(3i64, 128i64, 128i64, 191i64, 0i64, 3i64, "Z"))) { pass false; }   // 80 80 BF
+    if (!(relay exact(2i64, 254i64, 255i64, 0i64, 0i64, 2i64, "Z"))) { pass false; }     // FE FF
+    if (!(relay exact(4i64, 248i64, 136i64, 128i64, 128i64, 4i64, "Z"))) { pass false; } // F8 88 80 80: 1 + 3 strays
+    // an invalid sequence at a nonzero offset, with text on both sides
+    string:full = string_concat(string_concat("ab", relay mk(3i64, 237i64, 160i64, 128i64, 0i64)), "cd");
+    if (!(relay sub_is(full, 0i64, 7i64, "ab\u{fffd}cd"))) { pass false; }
+    if (!(relay sub_is(full, 2i64, 5i64, "\u{fffd}cd"))) { pass false; }
+    if (!(relay sub_is(full, 1i64, 6i64, "b\u{fffd}cd"))) { pass false; }
+    // chunk ending inside the sequence: one replacement, nothing beyond the chunk
+    if (!(relay sub_is(full, 0i64, 4i64, "ab\u{fffd}"))) { pass false; }
+    if (!(relay sub_is(full, 2i64, 2i64, "\u{fffd}"))) { pass false; }
+    // chunk starting inside a valid character: each stray continuation is one replacement
+    string:euro = "a\u{20ac}z";
+    if (!(relay sub_is(euro, 2i64, 3i64, "\u{fffd}\u{fffd}z"))) { pass false; }          // 82 AC z
+    if (!(relay sub_is(euro, 3i64, 2i64, "\u{fffd}z"))) { pass false; }                  // AC z
+    // a chunk ending inside a valid character
+    pass relay sub_is(euro, 0i64, 3i64, "a\u{fffd}");
+};
+
 func:check_all = int32() {
     if (!(relay g_iterate_valid())) { pass 11i32; }
     if (!(relay g_iterate_invalid())) { pass 12i32; }
@@ -575,6 +688,9 @@ func:check_all = int32() {
     if (!(relay g_punct_unicode())) { pass 20i32; }
     if (!(relay g_fold())) { pass 21i32; }
     if (!(relay g_fold_chunks())) { pass 22i32; }
+    if (!(relay g_check_whole())) { pass 23i32; }
+    if (!(relay g_check_cont())) { pass 24i32; }
+    if (!(relay g_check_stray())) { pass 25i32; }
     pass 0i32;
 };
 
