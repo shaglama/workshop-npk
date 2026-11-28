@@ -1,0 +1,833 @@
+// Seam tests for cm_refs, by Carbon (Google). Written from INTERFACES.md
+// Part 6 alone (with Parts 1, 2 and 3 for Chunk/Buffer, case folding, and
+// URL/title cleaning) and the CommonMark 0.31.2 specification (link reference
+// definitions, link labels, link destinations and link titles). The part's
+// source, its checks and its review were not read.
+mod:references_seam;
+
+use "../../../src/buffer/cm_buffer.npk".*;
+use "../../../src/references/cm_refs.npk".*;
+use "../../../../pin/lib/nstr.npk".nstr_eq;
+
+// ---- helpers -------------------------------------------------------------
+
+func:repeat_str = string(string:piece, int64:count) {
+    Buffer:buf = relay buffer_create();
+    int64:i = 0i64;
+    while (i < count) decreases count - i {
+        relay buffer_puts(@buf, piece);
+        i = i + 1i64;
+    }
+    pass raw buffer_detach(move(buf));
+};
+
+func:int_to_dec = string(int64:n) {
+    Buffer:buf = relay buffer_create();
+    if (n == 0i64) {
+        relay buffer_putc(@buf, 48i64);
+        pass raw buffer_detach(move(buf));
+    }
+    int64:div = 1i64;
+    while (n / div >= 10i64) decreases n - div {
+        div = div * 10i64;
+    }
+    int64:rem = n;
+    while (div > 0i64) decreases div {
+        relay buffer_putc(@buf, 48i64 + (rem / div));
+        rem = rem % div;
+        div = div / 10i64;
+    }
+    pass raw buffer_detach(move(buf));
+};
+
+func:add_str = NIL(RefMap->:m, string:lab, string:url, string:ttl) {
+    relay refmap_add(m, lab, raw chunk_all(lab), url, raw chunk_all(url), ttl, raw chunk_all(ttl));
+    pass NIL;
+};
+
+// Adds a definition from temporary strings that drop before this helper returns,
+// testing that refmap_add owns its stored copies and retains no borrow of bases.
+func:add_ephemeral = NIL(RefMap->:m, string:l_part, string:u_part, string:t_part) {
+    Buffer:lb = relay buffer_create();
+    relay buffer_puts(@lb, "xx");
+    relay buffer_puts(@lb, l_part);
+    relay buffer_puts(@lb, "yy");
+    string:l_base = raw buffer_detach(move(lb));
+
+    Buffer:ub = relay buffer_create();
+    relay buffer_puts(@ub, "[[");
+    relay buffer_puts(@ub, u_part);
+    relay buffer_puts(@ub, "]]");
+    string:u_base = raw buffer_detach(move(ub));
+
+    Buffer:tb = relay buffer_create();
+    relay buffer_puts(@tb, "<<");
+    relay buffer_puts(@tb, t_part);
+    relay buffer_puts(@tb, ">>");
+    string:t_base = raw buffer_detach(move(tb));
+
+    relay refmap_add(
+        m,
+        l_base, raw chunk_of(l_base, 2i64, l_part.len),
+        u_base, raw chunk_of(u_base, 2i64, u_part.len),
+        t_base, raw chunk_of(t_base, 2i64, t_part.len)
+    );
+    pass NIL;
+};
+
+func:hit_is = bool(RefMap:m, string:lab, string:want_url, string:want_title) {
+    RefHit:h = relay refmap_lookup(m, lab, raw chunk_all(lab));
+    if (!h.found) { pass false; }
+    pass raw nstr_eq(h.url, want_url) && raw nstr_eq(h.title, want_title);
+};
+
+func:miss_is = bool(RefMap:m, string:lab) {
+    RefHit:h = relay refmap_lookup(m, lab, raw chunk_all(lab));
+    pass !h.found;
+};
+
+func:parse_all = int64(RefMap->:m, string:input) {
+    RefParse:rp = relay parse_ref_definition(m, input, raw chunk_all(input));
+    pass rp.consumed;
+};
+
+// ---- group 11: empty map, basic add/lookup, independent maps & clones ----
+
+func:g_empty_and_basic = bool() {
+    RefMap:m = relay refmap_new();
+    if (!(relay miss_is(m, "foo"))) { pass false; }
+    if (!(relay miss_is(m, ""))) { pass false; }
+    if (!(relay miss_is(m, "   "))) { pass false; }
+    if (!(relay miss_is(m, "\t\r\n"))) { pass false; }
+
+    relay add_str(@m, "foo", "/url", "\"the title\"");
+    if (!(relay hit_is(m, "foo", "/url", "the title"))) { pass false; }
+    if (!(relay miss_is(m, "bar"))) { pass false; }
+    if (!(relay miss_is(m, "fo"))) { pass false; }
+    if (!(relay miss_is(m, "fooo"))) { pass false; }
+
+    // Empty title and empty URL are distinct valid values.
+    relay add_str(@m, "notitle", "/bare", "");
+    relay add_str(@m, "nourl", "", "'empty-dest'");
+    if (!(relay hit_is(m, "notitle", "/bare", ""))) { pass false; }
+    if (!(relay hit_is(m, "nourl", "", "empty-dest"))) { pass false; }
+
+    // Ephemeral bases dropped before lookup; returned RefHit strings are clones
+    // that the caller can move and drop without disturbing the map.
+    relay add_ephemeral(@m, "ephem", "/eph-url", "(eph title)");
+    {
+        RefHit:h1 = relay refmap_lookup(m, "ephem", raw chunk_all("ephem"));
+        if (!h1.found) { pass false; }
+        RefHit:moved_h = move(h1);
+        pick (move(moved_h)) {
+            (RefHit { found, url, title }) {
+                if (!found) { pass false; }
+                if (!(raw nstr_eq(url, "/eph-url"))) { pass false; }
+                if (!(raw nstr_eq(title, "eph title"))) { pass false; }
+            }
+        }
+    }
+    if (!(relay hit_is(m, "ephem", "/eph-url", "eph title"))) { pass false; }
+
+    // Two RefMaps are independent owners.
+    RefMap:m2 = relay refmap_new();
+    if (!(relay miss_is(m2, "foo"))) { pass false; }
+    relay add_str(@m2, "foo", "/other", "\"other title\"");
+    if (!(relay hit_is(m2, "foo", "/other", "other title"))) { pass false; }
+    pass relay hit_is(m, "foo", "/url", "the title");
+};
+
+// ---- group 12: label normalisation (case fold, whitespace, raw escapes) --
+
+func:g_label_norm = bool() {
+    RefMap:m = relay refmap_new();
+
+    // ASCII case folding
+    relay add_str(@m, "Foo", "/ascii", "\"A\"");
+    if (!(relay hit_is(m, "foo", "/ascii", "A"))) { pass false; }
+    if (!(relay hit_is(m, "FOO", "/ascii", "A"))) { pass false; }
+    if (!(relay hit_is(m, "fOo", "/ascii", "A"))) { pass false; }
+
+    // Full Unicode case folding: ẞ / ß / SS, Greek, ligatures, İ, Kelvin
+    relay add_str(@m, "\u{1e9e}", "/sharp", "");
+    if (!(relay hit_is(m, "SS", "/sharp", ""))) { pass false; }
+    if (!(relay hit_is(m, "ss", "/sharp", ""))) { pass false; }
+    if (!(relay hit_is(m, "\u{df}", "/sharp", ""))) { pass false; }
+
+    relay add_str(@m, "Stra\u{df}e", "/street", "");
+    if (!(relay hit_is(m, "STRASSE", "/street", ""))) { pass false; }
+    if (!(relay hit_is(m, "stra\u{1e9e}e", "/street", ""))) { pass false; }
+
+    relay add_str(@m, "\u{391}\u{393}\u{3a9}", "/greek", "");
+    if (!(relay hit_is(m, "\u{3b1}\u{3b3}\u{3c9}", "/greek", ""))) { pass false; }
+
+    relay add_str(@m, "\u{3a3}", "/sigma", "");
+    if (!(relay hit_is(m, "\u{3c3}", "/sigma", ""))) { pass false; }
+    if (!(relay hit_is(m, "\u{3c2}", "/sigma", ""))) { pass false; }
+
+    relay add_str(@m, "\u{fb01}le", "/lig1", "");
+    if (!(relay hit_is(m, "FILE", "/lig1", ""))) { pass false; }
+
+    relay add_str(@m, "\u{fb03}ce", "/lig2", "");
+    if (!(relay hit_is(m, "FFICE", "/lig2", ""))) { pass false; }
+
+    relay add_str(@m, "\u{130}stanbul", "/ist", "");
+    if (!(relay hit_is(m, "i\u{307}STANBUL", "/ist", ""))) { pass false; }
+
+    relay add_str(@m, "\u{212a}elvin", "/kelvin", "");
+    if (!(relay hit_is(m, "kelvin", "/kelvin", ""))) { pass false; }
+
+    // Whitespace trimming and collapsing (spaces, tabs, LF, CR, CRLF)
+    relay add_str(@m, "  \t\r\nFoo\n  \tbar\r\nbaz \t\n", "/ws", "'W'");
+    if (!(relay hit_is(m, "foo bar baz", "/ws", "W"))) { pass false; }
+    if (!(relay hit_is(m, "\tFOO\r\n\tBAR   BAZ\n", "/ws", "W"))) { pass false; }
+    if (!(relay hit_is(m, "foo\rbar\rbaz", "/ws", "W"))) { pass false; }
+    if (!(relay miss_is(m, "foobarbaz"))) { pass false; }
+    if (!(relay miss_is(m, "foo bar"))) { pass false; }
+
+    // Non-ASCII Unicode whitespace (U+00A0 NBSP) is not stripped or collapsed
+    // in CommonMark 0.31.2 label normalisation (only space, tab, LF, CR are).
+    relay add_str(@m, "\u{a0}", "/nbsp-only", "");
+    if (!(relay hit_is(m, "\u{a0}", "/nbsp-only", ""))) { pass false; }
+    relay add_str(@m, "foo\u{a0}bar", "/nbsp-mid", "");
+    if (!(relay hit_is(m, "FOO\u{a0}BAR", "/nbsp-mid", ""))) { pass false; }
+    if (!(relay miss_is(m, "foo bar"))) { pass false; }
+
+    // Labels are normalised as strings, NOT inline-unescaped (spec ex. 552):
+    // [foo\!] and [foo!] are distinct labels.
+    relay add_str(@m, "foo!", "/bang", "");
+    if (!(relay miss_is(m, "foo\\!"))) { pass false; }
+    relay add_str(@m, "foo\\!", "/escaped-bang", "");
+    if (!(relay hit_is(m, "FOO\\!", "/escaped-bang", ""))) { pass false; }
+    if (!(relay hit_is(m, "FOO!", "/bang", ""))) { pass false; }
+
+    relay add_str(@m, "*foo* bar", "/emph-label", "");
+    if (!(relay hit_is(m, "*FOO*   BAR", "/emph-label", ""))) { pass false; }
+    pass relay miss_is(m, "foo bar");
+};
+
+// ---- group 13: duplicate precedence, blank labels, 1000-byte label limit -
+
+func:g_precedence_and_limits = bool() {
+    RefMap:m = relay refmap_new();
+
+    // First definition wins; later matching definitions are dropped (including
+    // when the first had an empty title and the second supplies a title).
+    relay add_str(@m, "Dup", "/first", "\"one\"");
+    relay add_str(@m, "  dup  ", "/second", "\"two\"");
+    relay add_str(@m, "DUP", "/third", "");
+    if (!(relay hit_is(m, "dup", "/first", "one"))) { pass false; }
+
+    relay add_str(@m, "notitle-first", "/u-nt1", "");
+    relay add_str(@m, "NOTITLE-FIRST", "/u-nt2", "\"late title\"");
+    if (!(relay hit_is(m, "notitle-first", "/u-nt1", ""))) { pass false; }
+
+    relay add_str(@m, "\u{df}", "/s1", "");
+    relay add_str(@m, "SS", "/s2", "");
+    if (!(relay hit_is(m, "\u{1e9e}", "/s1", ""))) { pass false; }
+
+    // Empty and whitespace-only labels are not definitions and never match.
+    relay add_str(@m, "", "/no1", "");
+    relay add_str(@m, "   ", "/no2", "");
+    relay add_str(@m, " \t\r\n ", "/no3", "");
+    if (!(relay miss_is(m, ""))) { pass false; }
+    if (!(relay miss_is(m, " "))) { pass false; }
+    if (!(relay miss_is(m, " \t\r\n "))) { pass false; }
+
+    // 1000-byte label limit (INTERFACES.md Part 6: "at most 1000 bytes of label
+    // (longer labels are not definitions and never match)").
+    string:k999 = relay repeat_str("a", 999i64);
+    string:k1000 = relay repeat_str("b", 1000i64);
+    string:k1001 = relay repeat_str("c", 1001i64);
+    if (k999.len != 999i64 || k1000.len != 1000i64 || k1001.len != 1001i64) { pass false; }
+
+    relay add_str(@m, k999, "/len999", "");
+    relay add_str(@m, k1000, "/len1000", "");
+    relay add_str(@m, k1001, "/len1001", "");
+    if (!(relay hit_is(m, k999, "/len999", ""))) { pass false; }
+    if (!(relay hit_is(m, k1000, "/len1000", ""))) { pass false; }
+    if (!(relay miss_is(m, k1001))) { pass false; }
+
+    // A lookup label > 1000 bytes never matches even if trimming whitespace
+    // would reduce it to an existing short key.
+    string:pad1000 = relay repeat_str(" ", 1000i64);
+    string:over_padded = string_concat(pad1000, "dup");
+    if (over_padded.len != 1003i64) { pass false; }
+    if (!(relay miss_is(m, over_padded))) { pass false; }
+
+    // Multi-byte UTF-8: 500 x 2-byte U+00E9 = 1000 bytes (accepted),
+    // 501 x 2-byte U+00E9 = 1002 bytes (rejected by byte-length limit).
+    string:u1000 = relay repeat_str("\u{e9}", 500i64);
+    string:u1002 = relay repeat_str("\u{e9}", 501i64);
+    if (u1000.len != 1000i64 || u1002.len != 1002i64) { pass false; }
+    relay add_str(@m, u1000, "/utf1000", "");
+    relay add_str(@m, u1002, "/utf1002", "");
+    if (!(relay hit_is(m, u1000, "/utf1000", ""))) { pass false; }
+    if (!(relay miss_is(m, u1002))) { pass false; }
+
+    // Same 1000 vs 1001 boundary through parse_ref_definition:
+    string:p1000_key = relay repeat_str("p", 1000i64);
+    string:p1000_def = string_concat(string_concat("[", p1000_key), "]: /parsed1000\n");
+    if ((relay parse_all(@m, p1000_def)) != p1000_def.len) { pass false; }
+    if (!(relay hit_is(m, p1000_key, "/parsed1000", ""))) { pass false; }
+
+    string:p1001_key = relay repeat_str("q", 1001i64);
+    string:p1001_def = string_concat(string_concat("[", p1001_key), "]: /parsed1001\n");
+    if ((relay parse_all(@m, p1001_def)) != 0i64) { pass false; }
+    if (!(relay miss_is(m, p1001_key))) { pass false; }
+
+    string:pu1002_def = string_concat(string_concat("[", u1002), "]: /parsed-utf1002\n");
+    pass (relay parse_all(@m, pu1002_def)) == 0i64;
+};
+
+// ---- group 14: URL and title cleaning at store time in refmap_add --------
+
+func:g_cleaning_via_add = bool() {
+    RefMap:m = relay refmap_new();
+
+    // clean_url: trim ASCII whitespace first, then entity-unescape, then
+    // backslash-unescape — so entity-decoded spaces at the edges survive.
+    relay add_str(@m, "u-trim", "  \t\r\n/alpha/beta \t\n", "");
+    if (!(relay hit_is(m, "u-trim", "/alpha/beta", ""))) { pass false; }
+
+    relay add_str(@m, "u-edge", "  &#32;/edge&amp;mid&auml;&#x20;  ", "");
+    if (!(relay hit_is(m, "u-edge", " /edge&mid\u{e4} ", ""))) { pass false; }
+
+    // Backslash before ASCII punctuation dropped; before non-punctuation kept.
+    relay add_str(@m, "u-esc", "/url\\bar\\*baz\\(1\\)\\\\end", "");
+    if (!(relay hit_is(m, "u-esc", "/url\\bar*baz(1)\\end", ""))) { pass false; }
+
+    // Numeric character reference 0 becomes U+FFFD.
+    relay add_str(@m, "u-nul-ent", "/a&#0;b&#x0;c", "\"t&#0;\"");
+    if (!(relay hit_is(m, "u-nul-ent", "/a\u{fffd}b\u{fffd}c", "t\u{fffd}"))) { pass false; }
+
+    // Whitespace-only URL cleans to empty string.
+    relay add_str(@m, "u-blank", "   \t  ", "");
+    if (!(relay hit_is(m, "u-blank", "", ""))) { pass false; }
+
+    // clean_title: NO trim; strips one matching pair of outer delimiters
+    // ("...", '...' or (...)) when len >= 2, then entity + backslash unescapes.
+    relay add_str(@m, "t-dq", "/1", "\"  spaced &amp; \\\"quoted\\\" \\z  \"");
+    if (!(relay hit_is(m, "t-dq", "/1", "  spaced & \"quoted\" \\z  "))) { pass false; }
+
+    relay add_str(@m, "t-sq", "/2", "'  single \\' &copy;  '");
+    if (!(relay hit_is(m, "t-sq", "/2", "  single ' \u{a9}  "))) { pass false; }
+
+    relay add_str(@m, "t-par", "/3", "(  paren \\(x\\)  )");
+    if (!(relay hit_is(m, "t-par", "/3", "  paren (x)  "))) { pass false; }
+
+    // Unquoted title keeps its surrounding whitespace (no trim!).
+    relay add_str(@m, "t-raw", "/4", "  raw &amp; \\*  ");
+    if (!(relay hit_is(m, "t-raw", "/4", "  raw & *  "))) { pass false; }
+
+    // Mismatched or single-byte delimiters are NOT stripped.
+    relay add_str(@m, "t-mis1", "/5", "\"mismatch'");
+    if (!(relay hit_is(m, "t-mis1", "/5", "\"mismatch'"))) { pass false; }
+    relay add_str(@m, "t-mis2", "/6", "(mismatch\"");
+    if (!(relay hit_is(m, "t-mis2", "/6", "(mismatch\""))) { pass false; }
+    relay add_str(@m, "t-one", "/7", "\"");
+    if (!(relay hit_is(m, "t-one", "/7", "\""))) { pass false; }
+
+    // Empty delimiter pairs strip to empty string; only ONE outer pair strips.
+    relay add_str(@m, "t-edq", "/8", "\"\"");
+    relay add_str(@m, "t-esq", "/9", "''");
+    relay add_str(@m, "t-epar", "/10", "()");
+    relay add_str(@m, "t-nested", "/11", "\"'inner'\"");
+    if (!(relay hit_is(m, "t-edq", "/8", ""))) { pass false; }
+    if (!(relay hit_is(m, "t-esq", "/9", ""))) { pass false; }
+    if (!(relay hit_is(m, "t-epar", "/10", ""))) { pass false; }
+    if (!(relay hit_is(m, "t-nested", "/11", "'inner'"))) { pass false; }
+
+    // Arbitrary bytes (raw 0xFF and interior NUL 0x00, built via buffer_putc)
+    // survive cleaning and cloning intact.
+    Buffer:ru = relay buffer_create();
+    relay buffer_putc(@ru, 47i64);   // '/'
+    relay buffer_putc(@ru, 0i64);    // NUL
+    relay buffer_putc(@ru, 255i64);  // 0xFF
+    relay buffer_putc(@ru, 97i64);   // 'a'
+    string:raw_u = raw buffer_detach(move(ru));
+
+    Buffer:rt = relay buffer_create();
+    relay buffer_putc(@rt, 34i64);   // '"'
+    relay buffer_putc(@rt, 255i64);  // 0xFF
+    relay buffer_putc(@rt, 0i64);    // NUL
+    relay buffer_putc(@rt, 34i64);   // '"'
+    string:raw_t = raw buffer_detach(move(rt));
+
+    relay add_str(@m, "raw-bytes", raw_u, raw_t);
+    RefHit:rh = relay refmap_lookup(m, "RAW-BYTES", raw chunk_all("RAW-BYTES"));
+    if (!rh.found || rh.url.len != 4i64 || rh.title.len != 2i64) { pass false; }
+    if (rh.url.ptr[0i64] != 47u8 || rh.url.ptr[1i64] != 0u8
+        || rh.url.ptr[2i64] != 255u8 || rh.url.ptr[3i64] != 97u8) { pass false; }
+    pass rh.title.ptr[0i64] == 255u8 && rh.title.ptr[1i64] == 0u8;
+};
+
+// ---- group 15: chunk offsets and lengths in refmap_add and refmap_lookup --
+
+func:g_chunks_add_lookup = bool() {
+    RefMap:m = relay refmap_new();
+
+    // Three separate bases with surrounding noise that would change the result
+    // if off or len were ignored.
+    string:lb = "NOPE[  ChUnK\tLab  ]NOPE";
+    string:ub = "BAD  /chunk&amp;url\\*1  BAD";
+    string:tb = "ignore\"chunk title\"ignore";
+    relay refmap_add(
+        @m,
+        lb, raw chunk_of(lb, 5i64, 13i64),
+        ub, raw chunk_of(ub, 3i64, 21i64),
+        tb, raw chunk_of(tb, 6i64, 13i64)
+    );
+    if (!(relay hit_is(m, "chunk lab", "/chunk&url*1", "chunk title"))) { pass false; }
+    if (!(relay miss_is(m, "nope[ chunk lab ]nope"))) { pass false; }
+
+    // All three chunks slicing different regions of a single shared base string.
+    string:shared = "##Alpha##/shared/path##(shared title)##";
+    relay refmap_add(
+        @m,
+        shared, raw chunk_of(shared, 2i64, 5i64),
+        shared, raw chunk_of(shared, 9i64, 12i64),
+        shared, raw chunk_of(shared, 23i64, 14i64)
+    );
+    if (!(relay hit_is(m, "alpha", "/shared/path", "shared title"))) { pass false; }
+
+    // Lookup through strict sub-chunks of a larger base.
+    string:query = "before [  ALPHA  ] middle [CHUNK   LAB] end";
+    RefHit:q1 = relay refmap_lookup(m, query, raw chunk_of(query, 8i64, 9i64));
+    if (!q1.found || !(raw nstr_eq(q1.url, "/shared/path"))) { pass false; }
+    RefHit:q2 = relay refmap_lookup(m, query, raw chunk_of(query, 27i64, 11i64));
+    if (!q2.found || !(raw nstr_eq(q2.url, "/chunk&url*1"))) { pass false; }
+
+    // Zero-length chunks at non-zero offsets.
+    relay refmap_add(
+        @m,
+        shared, raw chunk_of(shared, 2i64, 1i64),  // "A"
+        shared, raw chunk_of(shared, 9i64, 0i64),  // ""
+        shared, raw chunk_of(shared, 23i64, 0i64)  // ""
+    );
+    if (!(relay hit_is(m, "a", "", ""))) { pass false; }
+    RefHit:q_empty = relay refmap_lookup(m, query, raw chunk_of(query, 5i64, 0i64));
+    pass !q_empty.found;
+};
+
+// ---- group 16: parse_ref_definition basics, indent, line endings, EOF ----
+
+func:g_parse_basic_and_indent = bool() {
+    RefMap:m = relay refmap_new();
+
+    // Spec ex. 192: basic definition
+    string:d1 = "[foo]: /url \"title\"\n";
+    if (d1.len != 20i64) { pass false; }
+    if ((relay parse_all(@m, d1)) != 20i64) { pass false; }
+    if (!(relay hit_is(m, "foo", "/url", "title"))) { pass false; }
+
+    // 0, 1, 2, 3 leading spaces allowed; 4 spaces and leading tab rejected.
+    if ((relay parse_all(@m, "[i0]: /u0\n")) != 10i64) { pass false; }
+    if ((relay parse_all(@m, " [i1]: /u1\n")) != 11i64) { pass false; }
+    if ((relay parse_all(@m, "  [i2]: /u2\n")) != 12i64) { pass false; }
+    if ((relay parse_all(@m, "   [i3]: /u3\n")) != 13i64) { pass false; }
+    if ((relay parse_all(@m, "    [i4]: /u4\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "\t[it]: /ut\n")) != 0i64) { pass false; }
+    if (!(relay hit_is(m, "i0", "/u0", ""))) { pass false; }
+    if (!(relay hit_is(m, "i1", "/u1", ""))) { pass false; }
+    if (!(relay hit_is(m, "i2", "/u2", ""))) { pass false; }
+    if (!(relay hit_is(m, "i3", "/u3", ""))) { pass false; }
+    if (!(relay miss_is(m, "i4"))) { pass false; }
+    if (!(relay miss_is(m, "it"))) { pass false; }
+
+    // Spec ex. 193: destination and title each on the next line with spaces/tabs
+    string:d2 = "   [ml-ws]: \n      /url2  \n           'the title'  \n";
+    if ((relay parse_all(@m, d2)) != d2.len) { pass false; }
+    if (!(relay hit_is(m, "ml-ws", "/url2", "the title"))) { pass false; }
+
+    // Missing destination or blank line before destination -> consumed == 0
+    if ((relay parse_all(@m, "[no1]:")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[no2]:   \t")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[no3]:\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[no4]:\n\n/url\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[no5]:  \n  \t\n/url\n")) != 0i64) { pass false; }
+    if (!(relay miss_is(m, "no1"))) { pass false; }
+    if (!(relay miss_is(m, "no4"))) { pass false; }
+
+    // EOF without newline, trailing spaces/tabs, and LF / CRLF / lone CR stops
+    if ((relay parse_all(@m, "[eof1]: /e1")) != 11i64) { pass false; }
+    if ((relay parse_all(@m, "[eof2]: /e2   \t")) != 15i64) { pass false; }
+    if ((relay parse_all(@m, "[lf]: /lf\nrest")) != 10i64) { pass false; }
+    if ((relay parse_all(@m, "[crlf]: /crlf\r\nrest")) != 15i64) { pass false; }
+    if ((relay parse_all(@m, "[cr]: /cr\rrest")) != 10i64) { pass false; }
+    if (!(relay hit_is(m, "eof1", "/e1", ""))) { pass false; }
+    if (!(relay hit_is(m, "eof2", "/e2", ""))) { pass false; }
+    if (!(relay hit_is(m, "lf", "/lf", ""))) { pass false; }
+    if (!(relay hit_is(m, "crlf", "/crlf", ""))) { pass false; }
+    pass relay hit_is(m, "cr", "/cr", "");
+};
+
+// ---- group 17: parse_ref_definition destinations -------------------------
+
+func:g_parse_destinations = bool() {
+    RefMap:m = relay refmap_new();
+
+    // Angle-bracketed destinations: empty <>, spaces, parens, escaped \< and \>
+    if ((relay parse_all(@m, "[empty]: <>\n")) != 12i64) { pass false; }
+    if (!(relay hit_is(m, "empty", "", ""))) { pass false; }
+
+    string:da1 = "[sp]: <my (url) here> 't'\n";
+    if ((relay parse_all(@m, da1)) != da1.len) { pass false; }
+    if (!(relay hit_is(m, "sp", "my (url) here", "t"))) { pass false; }
+
+    string:da2 = "[ang]: <a\\>b\\<c&amp;d>\n";
+    if ((relay parse_all(@m, da2)) != da2.len) { pass false; }
+    if (!(relay hit_is(m, "ang", "a>b<c&d", ""))) { pass false; }
+
+    // Invalid angle-bracket destinations: escaped closing >, unescaped <, line breaks
+    if ((relay parse_all(@m, "[ba1]: <foo\\>\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[ba2]: <a<b>\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[ba3]: <foo\nbar>\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[ba4]: <foo\rbar>\n")) != 0i64) { pass false; }
+    if (!(relay miss_is(m, "ba1"))) { pass false; }
+    if (!(relay miss_is(m, "ba2"))) { pass false; }
+
+    // Bare destinations: balanced nested parens, escaped unbalanced parens,
+    // quoted token with no spaces (spec ex. 502), NBSP non-separator (spec ex. 506)
+    string:db1 = "[p1]: my_(url)\n";
+    string:db2 = "[p2]: a(b(c(d(e(f)))))\n";
+    string:db3 = "[p3]: foo\\(and\\(bar\\)\n";
+    string:db4 = "[p4]: foo\\)\\:\n";
+    string:db5 = "[qdest]: \"title\"\n";
+    string:db6 = "[nbsp-sep]: /url\u{a0}\"title\"\n";
+    if ((relay parse_all(@m, db1)) != db1.len) { pass false; }
+    if ((relay parse_all(@m, db2)) != db2.len) { pass false; }
+    if ((relay parse_all(@m, db3)) != db3.len) { pass false; }
+    if ((relay parse_all(@m, db4)) != db4.len) { pass false; }
+    if ((relay parse_all(@m, db5)) != db5.len) { pass false; }
+    if ((relay parse_all(@m, db6)) != db6.len) { pass false; }
+    if (!(relay hit_is(m, "p1", "my_(url)", ""))) { pass false; }
+    if (!(relay hit_is(m, "p2", "a(b(c(d(e(f)))))", ""))) { pass false; }
+    if (!(relay hit_is(m, "p3", "foo(and(bar)", ""))) { pass false; }
+    if (!(relay hit_is(m, "p4", "foo):", ""))) { pass false; }
+    if (!(relay hit_is(m, "qdest", "\"title\"", ""))) { pass false; }
+    if (!(relay hit_is(m, "nbsp-sep", "/url\u{a0}\"title\"", ""))) { pass false; }
+
+    // Invalid bare destinations: unbalanced parens, unquoted space, ASCII control
+    if ((relay parse_all(@m, "[bp1]: foo(and(bar)\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[bp2]: foo)bar\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[bp3]: foo)\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[bsp]: /my uri\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[qbad]: \"quoted space\"\n")) != 0i64) { pass false; }
+
+    Buffer:ctrl_buf = relay buffer_create();
+    relay buffer_puts(@ctrl_buf, "[bctrl]: /a");
+    relay buffer_putc(@ctrl_buf, 1i64);
+    relay buffer_puts(@ctrl_buf, "b\n");
+    string:ctrl_def = raw buffer_detach(move(ctrl_buf));
+    if ((relay parse_all(@m, ctrl_def)) != 0i64) { pass false; }
+
+    Buffer:del_buf = relay buffer_create();
+    relay buffer_puts(@del_buf, "[bdel]: /a");
+    relay buffer_putc(@del_buf, 127i64);
+    relay buffer_puts(@del_buf, "b\n");
+    string:del_def = raw buffer_detach(move(del_buf));
+    if ((relay parse_all(@m, del_def)) != 0i64) { pass false; }
+
+    // Entities, backslashes and Unicode in bare destinations (spec ex. 201, 205)
+    string:du1 = "[esc]: /url\\bar\\*baz&amp;&auml;\n";
+    string:du2 = "[\u{391}\u{393}\u{3a9}]: /\u{3c6}\u{3bf}\u{3c5}\n";
+    if ((relay parse_all(@m, du1)) != du1.len) { pass false; }
+    if ((relay parse_all(@m, du2)) != du2.len) { pass false; }
+    if (!(relay hit_is(m, "esc", "/url\\bar*baz&\u{e4}", ""))) { pass false; }
+    pass relay hit_is(m, "\u{3b1}\u{3b3}\u{3c9}", "/\u{3c6}\u{3bf}\u{3c5}", "");
+};
+
+// ---- group 18: parse_ref_definition titles and next-line backtracking ----
+
+func:g_parse_titles_and_backtrack = bool() {
+    RefMap:m = relay refmap_new();
+
+    // All three title delimiters + empty titles + title whitespace preservation
+    string:t1 = "[t1]: /u \"double\"\n";
+    string:t2 = "[t2]: /u 'single'\n";
+    string:t3 = "[t3]: /u (parens)\n";
+    string:t4 = "[t4]: /u \"\"\n";
+    string:t5 = "[t5]: /u ''\n";
+    string:t6 = "[t6]: /u ()\n";
+    string:t7 = "[t7]: /u \"  keep spaces  \"\n";
+    if ((relay parse_all(@m, t1)) != t1.len) { pass false; }
+    if ((relay parse_all(@m, t2)) != t2.len) { pass false; }
+    if ((relay parse_all(@m, t3)) != t3.len) { pass false; }
+    if ((relay parse_all(@m, t4)) != t4.len) { pass false; }
+    if ((relay parse_all(@m, t5)) != t5.len) { pass false; }
+    if ((relay parse_all(@m, t6)) != t6.len) { pass false; }
+    if ((relay parse_all(@m, t7)) != t7.len) { pass false; }
+    if (!(relay hit_is(m, "t1", "/u", "double"))) { pass false; }
+    if (!(relay hit_is(m, "t2", "/u", "single"))) { pass false; }
+    if (!(relay hit_is(m, "t3", "/u", "parens"))) { pass false; }
+    if (!(relay hit_is(m, "t4", "/u", ""))) { pass false; }
+    if (!(relay hit_is(m, "t5", "/u", ""))) { pass false; }
+    if (!(relay hit_is(m, "t6", "/u", ""))) { pass false; }
+    if (!(relay hit_is(m, "t7", "/u", "  keep spaces  "))) { pass false; }
+
+    // Escaped delimiters and entities in titles (spec ex. 201, 505, 508)
+    string:t8 = "[t8]: /u \"foo\\\"bar\\baz&quot;\"\n";
+    string:t9 = "[t9]: /u 'title \"and\" (parens)'\n";
+    string:t10 = "[t10]: /u (a \\(b\\) c)\n";
+    if ((relay parse_all(@m, t8)) != t8.len) { pass false; }
+    if ((relay parse_all(@m, t9)) != t9.len) { pass false; }
+    if ((relay parse_all(@m, t10)) != t10.len) { pass false; }
+    if (!(relay hit_is(m, "t8", "/u", "foo\"bar\\baz\""))) { pass false; }
+    if (!(relay hit_is(m, "t9", "/u", "title \"and\" (parens)"))) { pass false; }
+    if (!(relay hit_is(m, "t10", "/u", "a (b) c"))) { pass false; }
+
+    // Multi-line title without a blank line (spec ex. 196)
+    string:ml = "[ml]: /url '\ntitle\nline1\nline2\n'\n";
+    if (ml.len != 33i64) { pass false; }
+    if ((relay parse_all(@m, ml)) != 33i64) { pass false; }
+    if (!(relay hit_is(m, "ml", "/url", "\ntitle\nline1\nline2\n"))) { pass false; }
+
+    // Invalid same-line titles / missing separator / trailing text -> consumed == 0
+    if ((relay parse_all(@m, "[ns]: <bar>(baz)\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[bt1]: /u (a (b) c)\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[bt2]: /u \"title \"and\" title\"\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[sl1]: /url \"title\" ok\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[sl2]: /url 'title\n\nwith blank line'\n")) != 0i64) { pass false; }
+    if (!(relay miss_is(m, "ns"))) { pass false; }
+    if (!(relay miss_is(m, "bt1"))) { pass false; }
+    if (!(relay miss_is(m, "bt2"))) { pass false; }
+    if (!(relay miss_is(m, "sl1"))) { pass false; }
+    if (!(relay miss_is(m, "sl2"))) { pass false; }
+
+    // Next-line invalid title or trailing text backtracks to title-less definition
+    // (spec ex. 209: [foo]: /url\n"title" ok -> defines foo -> /url with no title).
+    if ((relay parse_all(@m, "[nl1]: /url\n\"title\" ok\n")) != 12i64) { pass false; }
+    if (!(relay hit_is(m, "nl1", "/url", ""))) { pass false; }
+
+    if ((relay parse_all(@m, "[nl2]: /url\n'title\n\nblank'\n")) != 12i64) { pass false; }
+    if (!(relay hit_is(m, "nl2", "/url", ""))) { pass false; }
+
+    if ((relay parse_all(@m, "[nl3]: /url  \r\n(unclosed\n")) != 15i64) { pass false; }
+    pass relay hit_is(m, "nl3", "/url", "");
+};
+
+// ---- group 19: parse_ref_definition label syntax -------------------------
+
+func:g_parse_labels = bool() {
+    RefMap:m = relay refmap_new();
+
+    // Escaped brackets and backslashes inside labels (spec ex. 194, 556, 557)
+    string:l1 = "[Foo*bar\\]]:my_(url) 'title (with parens)'\n";
+    string:l2 = "[ref\\[]: /uri1\n";
+    string:l3 = "[bar\\\\]: /uri2\n";
+    if ((relay parse_all(@m, l1)) != l1.len) { pass false; }
+    if ((relay parse_all(@m, l2)) != l2.len) { pass false; }
+    if ((relay parse_all(@m, l3)) != l3.len) { pass false; }
+    if (!(relay hit_is(m, "foo*bar\\]", "my_(url)", "title (with parens)"))) { pass false; }
+    if (!(relay hit_is(m, "ref\\[", "/uri1", ""))) { pass false; }
+    if (!(relay hit_is(m, "bar\\\\", "/uri2", ""))) { pass false; }
+
+    // Unescaped brackets inside labels -> consumed == 0 (spec ex. 553-555)
+    if ((relay parse_all(@m, "[ref[]: /uri\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[ref[bar]]: /uri\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[[[foo]]]: /url\n")) != 0i64) { pass false; }
+
+    // Escaped opening bracket, space before colon, missing colon, plain text
+    if ((relay parse_all(@m, "\\[foo]: /url\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[foo] : /url\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[foo]\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "just a paragraph\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "")) != 0i64) { pass false; }
+
+    // Empty and whitespace-only labels -> consumed == 0 (spec ex. 558, 559)
+    if ((relay parse_all(@m, "[]: /uri\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[\n ]: /uri\n")) != 0i64) { pass false; }
+    if ((relay parse_all(@m, "[ \t\r\n ]: /uri\n")) != 0i64) { pass false; }
+
+    // Multi-line labels (spec ex. 207)
+    string:mll1 = "[\nfoo\n]: /url\n";
+    string:mll1_with_tail = string_concat(mll1, "bar\n");
+    if ((relay parse_all(@m, mll1_with_tail)) != mll1.len) { pass false; }
+    if (!(relay hit_is(m, "foo", "/url", ""))) { pass false; }
+
+    string:mll2 = "[\n  Multi\r\n  \tLine\n]: /ml-url \"T\"\n";
+    if ((relay parse_all(@m, mll2)) != mll2.len) { pass false; }
+    pass relay hit_is(m, "multi line", "/ml-url", "T");
+};
+
+// ---- group 20: multiple consecutive definitions in one parse call --------
+
+func:g_parse_multiple = bool() {
+    RefMap:m = relay refmap_new();
+
+    // Spec ex. 216 + trailing paragraph text: consumes all three definitions
+    // and stops cleanly before "trailing line\n".
+    string:defs = "[foo]: /foo-url \"foo\"\n[bar]: /bar-url\n  \"bar\"\n[baz]: /baz-url\n";
+    string:tail = "trailing line\n[later]: /not-consumed\n";
+    string:block = string_concat(defs, tail);
+    if ((relay parse_all(@m, block)) != defs.len) { pass false; }
+    if (!(relay hit_is(m, "foo", "/foo-url", "foo"))) { pass false; }
+    if (!(relay hit_is(m, "bar", "/bar-url", "bar"))) { pass false; }
+    if (!(relay hit_is(m, "baz", "/baz-url", ""))) { pass false; }
+    if (!(relay miss_is(m, "later"))) { pass false; }
+
+    // Duplicate definitions in one parse call: all are consumed, first wins.
+    RefMap:m2 = relay refmap_new();
+    string:dups = "[dup]: /first \"one\"\n   [DUP]: /second 'two'\n[  dup ]: <>\n";
+    if ((relay parse_all(@m2, dups)) != dups.len) { pass false; }
+    if (!(relay hit_is(m2, "dup", "/first", "one"))) { pass false; }
+
+    // Valid definition followed by an invalid same-line definition: first is
+    // consumed and stored, second is left unconsumed.
+    string:first_ok = "[ok]: /good 'yes'\n";
+    string:second_bad = "[bad]: /u \"title\" extra\n";
+    string:mixed = string_concat(first_ok, second_bad);
+    if ((relay parse_all(@m2, mixed)) != first_ok.len) { pass false; }
+    if (!(relay hit_is(m2, "ok", "/good", "yes"))) { pass false; }
+    pass relay miss_is(m2, "bad");
+};
+
+// ---- group 21: strict sub-chunk isolation in parse_ref_definition --------
+
+func:g_parse_chunks = bool() {
+    RefMap:m = relay refmap_new();
+
+    // Non-zero chunk offset: consumed is relative to the chunk, not the base.
+    string:prefix = "NOT A DEF\n    ";
+    string:body = "[sub]: /sub-url 'sub-title'\n";
+    string:suffix = "aftermath\n";
+    string:base1 = string_concat(string_concat(prefix, body), suffix);
+    Chunk:c1 = raw chunk_of(base1, prefix.len, body.len + suffix.len);
+    RefParse:rp1 = relay parse_ref_definition(@m, base1, c1);
+    if (rp1.consumed != body.len) { pass false; }
+    if (!(relay hit_is(m, "sub", "/sub-url", "sub-title"))) { pass false; }
+
+    // Truncated chunk length hides trailing same-line characters that would
+    // invalidate the definition on the full base.
+    string:base2 = "[cut]: /u \"tit\"EXTRA";
+    if ((relay parse_all(@m, base2)) != 0i64) { pass false; }
+    if (!(relay miss_is(m, "cut"))) { pass false; }
+    RefParse:rp2 = relay parse_ref_definition(@m, base2, raw chunk_of(base2, 0i64, 15i64));
+    if (rp2.consumed != 15i64) { pass false; }
+    if (!(relay hit_is(m, "cut", "/u", "tit"))) { pass false; }
+
+    // Truncated chunk length cutting off a closing > or destination or next-line title
+    string:base3 = "[cut2]: <url>";
+    RefParse:rp3 = relay parse_ref_definition(@m, base3, raw chunk_of(base3, 0i64, 12i64));
+    if (rp3.consumed != 0i64 || !(relay miss_is(m, "cut2"))) { pass false; }
+
+    string:base4 = "[cut3]: /url";
+    RefParse:rp4 = relay parse_ref_definition(@m, base4, raw chunk_of(base4, 0i64, 8i64));
+    if (rp4.consumed != 0i64 || !(relay miss_is(m, "cut3"))) { pass false; }
+
+    string:base5 = "[cut4]: /url\n\"ignored-outside-chunk\"\n";
+    RefParse:rp5 = relay parse_ref_definition(@m, base5, raw chunk_of(base5, 0i64, 12i64));
+    if (rp5.consumed != 12i64) { pass false; }
+    if (!(relay hit_is(m, "cut4", "/url", ""))) { pass false; }
+
+    // Empty chunks at offset 0 and inside a non-empty base
+    RefParse:rp6 = relay parse_ref_definition(@m, base1, raw chunk_of(base1, 0i64, 0i64));
+    RefParse:rp7 = relay parse_ref_definition(@m, base1, raw chunk_of(base1, 10i64, 0i64));
+    pass rp6.consumed == 0i64 && rp7.consumed == 0i64;
+};
+
+// ---- group 22: growth across 400 definitions (add + multi-def sub-chunk) --
+
+func:g_growth_and_scale = bool() {
+    RefMap:m = relay refmap_new();
+
+    // 200 definitions added directly via refmap_add
+    int64:i = 0i64;
+    while (i < 200i64) decreases 200i64 - i {
+        string:num = relay int_to_dec(i);
+        string:lab = string_concat("Add-", num);
+        string:url = string_concat("/add/", num);
+        string:ttl = string_concat(string_concat("\"Add Title ", num), "\"");
+        relay add_str(@m, lab, url, ttl);
+        i = i + 1i64;
+    }
+
+    // 200 consecutive definitions assembled inside a strict sub-chunk and parsed
+    // in a single parse_ref_definition call.
+    Buffer:bb = relay buffer_create();
+    relay buffer_puts(@bb, "HEADER_OUTSIDE_CHUNK\n");
+    int64:start_off = raw buffer_len(bb);
+    int64:j = 0i64;
+    while (j < 200i64) decreases 200i64 - j {
+        string:num = relay int_to_dec(j);
+        relay buffer_puts(@bb, "  [Parse-");
+        relay buffer_puts(@bb, num);
+        relay buffer_puts(@bb, "]: /parse/");
+        relay buffer_puts(@bb, num);
+        relay buffer_puts(@bb, " 'Parse Title ");
+        relay buffer_puts(@bb, num);
+        relay buffer_puts(@bb, "'\n");
+        j = j + 1i64;
+    }
+    int64:defs_len = (raw buffer_len(bb)) - start_off;
+    string:rem = "REMAINING_PARAGRAPH\n";
+    relay buffer_puts(@bb, rem);
+    relay buffer_puts(@bb, "[outside]: /never\n");
+    string:big = raw buffer_detach(move(bb));
+
+    Chunk:sub = raw chunk_of(big, start_off, defs_len + rem.len);
+    RefParse:rp = relay parse_ref_definition(@m, big, sub);
+    if (rp.consumed != defs_len) { pass false; }
+    if (!(relay miss_is(m, "outside"))) { pass false; }
+
+    // Attempted overwrites of early entries must lose to the originals.
+    relay add_str(@m, "ADD-0", "/wrong", "\"wrong\"");
+    relay add_str(@m, "PARSE-0", "/wrong", "\"wrong\"");
+
+    // Verify all 400 entries and 50 absent keys.
+    int64:k = 0i64;
+    while (k < 200i64) decreases 200i64 - k {
+        string:num = relay int_to_dec(k);
+        string:q_add = string_concat("  add-", string_concat(num, " "));
+        string:u_add = string_concat("/add/", num);
+        string:t_add = string_concat("Add Title ", num);
+        if (!(relay hit_is(m, q_add, u_add, t_add))) { pass false; }
+
+        string:q_parse = string_concat("PARSE-", num);
+        string:u_parse = string_concat("/parse/", num);
+        string:t_parse = string_concat("Parse Title ", num);
+        if (!(relay hit_is(m, q_parse, u_parse, t_parse))) { pass false; }
+        k = k + 1i64;
+    }
+
+    int64:m_idx = 0i64;
+    while (m_idx < 50i64) decreases 50i64 - m_idx {
+        string:miss_key = string_concat("missing-", relay int_to_dec(m_idx));
+        if (!(relay miss_is(m, miss_key))) { pass false; }
+        m_idx = m_idx + 1i64;
+    }
+    pass true;
+};
+
+func:check_all = int32() {
+    if (!(relay g_empty_and_basic())) { pass 11i32; }
+    if (!(relay g_label_norm())) { pass 12i32; }
+    if (!(relay g_precedence_and_limits())) { pass 13i32; }
+    if (!(relay g_cleaning_via_add())) { pass 14i32; }
+    if (!(relay g_chunks_add_lookup())) { pass 15i32; }
+    if (!(relay g_parse_basic_and_indent())) { pass 16i32; }
+    if (!(relay g_parse_destinations())) { pass 17i32; }
+    if (!(relay g_parse_titles_and_backtrack())) { pass 18i32; }
+    if (!(relay g_parse_labels())) { pass 19i32; }
+    if (!(relay g_parse_multiple())) { pass 20i32; }
+    if (!(relay g_parse_chunks())) { pass 21i32; }
+    if (!(relay g_growth_and_scale())) { pass 22i32; }
+    pass 0i32;
+};
+
+func:main = int32(cstring[]:_~argv) {
+    Result<int32>:outcome = check_all();
+    if (outcome.is_error) { !!! outcome.err; }
+    exit outcome.value;
+};
+
+// Any returned error is forwarded here unchanged by main.
+func:failsafe = int32(Error:err) {
+    pick (err) {
+        (Unreachable, HeapOom, HeapBadRequest, WildLeak, StackExhausted,
+         MachineFault, DivByZero, DivOverflow, IntOverflow, OutOfBounds,
+         DecreasesViolated, LimitViolated) { exit 100i32; },
+        (*) { exit 100i32; }
+    }
+};
